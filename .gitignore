@@ -1,0 +1,33 @@
+# Tenant-specific configuration
+*.settings.psd1
+*.local.psd1
+.env
+.env.*
+
+# Credentials and key material
+*.pfx
+*.p12
+*.pem
+*.key
+*.cer
+*.crt
+*.clixml
+*.credential
+*.token
+secrets/
+private/
+
+# Generated output
+artifacts/
+coverage/
+preview.png
+*.log
+*.tmp
+
+# Editors and operating systems
+.vscode/
+.idea/
+*.user
+Thumbs.db
+Desktop.ini
+.DS_Store

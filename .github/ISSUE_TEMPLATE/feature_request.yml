@@ -1,0 +1,28 @@
+name: Feature request
+description: Propose a focused Microsoft 365 administration workflow
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: Do not include production tenant data, real device names, secrets, or screenshots.
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Operator workflow
+      description: What task is unnecessarily slow or fragmented today?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe the smallest useful result and how an operator would use it.
+    validations:
+      required: true
+  - type: textarea
+    id: permissions
+    attributes:
+      label: Permissions and risk
+      description: If known, list Graph permissions and whether the operation reads secrets, changes state, or can disrupt a device.

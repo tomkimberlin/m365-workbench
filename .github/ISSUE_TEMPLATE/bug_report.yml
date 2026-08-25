@@ -1,0 +1,58 @@
+name: Bug report
+description: Report a reproducible problem using sanitized or demo data
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include tenant IDs, real device or user details, secrets, production screenshots, tokens, device codes, or unredacted logs. Report security problems through the private vulnerability-reporting link instead.
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Data-safety check
+      options:
+        - label: I removed all production tenant, user, device, and recovery data from this report.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: Commit SHA or release version
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode
+      options:
+        - Demo mode
+        - Tenant-connected mode with sanitized details
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Describe the visible behavior and the result you expected.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Prefer steps that work with the fictional demo inventory.
+      placeholder: |
+        1. Start the app with -DemoMode
+        2. Select ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Windows version, PowerShell version, display scaling, and Graph Authentication module version. Do not paste tenant or account identifiers.
