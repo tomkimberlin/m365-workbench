@@ -226,29 +226,6 @@ $xaml = @'
       </Setter>
     </Style>
 
-    <Style x:Key="ManagementFilterButton" TargetType="ToggleButton">
-      <Setter Property="Background" Value="White"/>
-      <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
-      <Setter Property="BorderThickness" Value="1"/>
-      <Setter Property="Padding" Value="12,0"/>
-      <Setter Property="Cursor" Value="Hand"/>
-      <Setter Property="FocusVisualStyle" Value="{StaticResource ButtonFocusVisual}"/>
-      <Setter Property="Template">
-        <Setter.Value>
-          <ControlTemplate TargetType="ToggleButton">
-            <Border x:Name="ButtonBorder" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="9" Padding="{TemplateBinding Padding}">
-              <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-            </Border>
-            <ControlTemplate.Triggers>
-              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="ButtonBorder" Property="Background" Value="#FFF7ED"/><Setter TargetName="ButtonBorder" Property="BorderBrush" Value="#FDBA74"/></Trigger>
-              <Trigger Property="IsChecked" Value="True"><Setter TargetName="ButtonBorder" Property="Background" Value="#FFF7ED"/><Setter TargetName="ButtonBorder" Property="BorderBrush" Value="#F59E0B"/><Setter TargetName="ButtonBorder" Property="BorderThickness" Value="1.5"/></Trigger>
-              <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.45"/></Trigger>
-            </ControlTemplate.Triggers>
-          </ControlTemplate>
-        </Setter.Value>
-      </Setter>
-    </Style>
-
     <Style x:Key="RecoveryKeyPickerItem" TargetType="{x:Type ComboBoxItem}">
       <Setter Property="Background" Value="Transparent"/>
       <Setter Property="Foreground" Value="#172033"/>
@@ -602,15 +579,16 @@ $xaml = @'
           <Button x:Name="ClearSearchButton" Grid.Column="3" Width="38" Content="×" Style="{StaticResource IconButton}" FontSize="18" Padding="8" Visibility="Collapsed" ToolTip="Clear search" AutomationProperties.Name="Clear search"/>
         </Grid>
       </Border>
-      <ToggleButton x:Name="EntraOnlyFilterButton" Grid.Column="2" Height="50" MinWidth="124" Style="{StaticResource ManagementFilterButton}" Margin="14,0,0,0" Visibility="Collapsed" ToolTip="Show devices found in Microsoft Entra with no matching Intune managed-device record" AutomationProperties.Name="Show Entra-only devices">
-        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-          <Ellipse Width="7" Height="7" Fill="#D97706" Margin="0,0,7,0"/>
-          <TextBlock Text="Entra only" Foreground="#9A3412" FontSize="12.5" FontWeight="SemiBold" VerticalAlignment="Center"/>
-          <Border Background="#FFEDD5" CornerRadius="9" MinWidth="20" Height="20" Margin="7,0,0,0" Padding="5,0">
-            <TextBlock x:Name="EntraOnlyFilterCount" Text="0" Foreground="#9A3412" FontSize="10.5" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-          </Border>
-        </StackPanel>
-      </ToggleButton>
+      <Border x:Name="EntraOnlyFilterContainer" Grid.Column="2" Height="50" MinWidth="146" Background="White" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="9" Padding="12,0" Margin="14,0,0,0" Visibility="Collapsed">
+        <CheckBox x:Name="EntraOnlyCheckBox" Style="{StaticResource FilterCheckBox}" VerticalAlignment="Center" ToolTip="Show devices found in Microsoft Entra with no matching Intune managed-device record" AutomationProperties.Name="Show Entra-only devices">
+          <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+            <TextBlock Text="Entra only" Foreground="#9A3412" FontSize="12.5" FontWeight="SemiBold" VerticalAlignment="Center"/>
+            <Border Background="#FFEDD5" CornerRadius="9" MinWidth="20" Height="20" Margin="7,0,0,0" Padding="5,0">
+              <TextBlock x:Name="EntraOnlyFilterCount" Text="0" Foreground="#9A3412" FontSize="10.5" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+            </Border>
+          </StackPanel>
+        </CheckBox>
+      </Border>
       <Border Grid.Column="3" Height="50" Background="White" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="9" Padding="12,0" Margin="10,0">
         <CheckBox x:Name="OnlyReadyCheckBox" Content="Recovery-ready only" Style="{StaticResource FilterCheckBox}" VerticalAlignment="Center" IsChecked="True" ToolTip="Show devices with LAPS or BitLocker recovery material"/>
       </Border>
@@ -1122,7 +1100,7 @@ $windowHandle = [System.Windows.Interop.WindowInteropHelper]::new($window).Ensur
 
 $controlNames = @(
     'AuthDot', 'AuthStatusText', 'SignInButton', 'SearchBox', 'SearchHint', 'ClearSearchButton',
-    'EntraOnlyFilterButton', 'EntraOnlyFilterCount', 'OnlyReadyCheckBox', 'RefreshButton', 'RefreshButtonText', 'DeviceGrid', 'EmptyState',
+    'EntraOnlyFilterContainer', 'EntraOnlyCheckBox', 'EntraOnlyFilterCount', 'OnlyReadyCheckBox', 'RefreshButton', 'RefreshButtonText', 'DeviceGrid', 'EmptyState',
     'EmptyStateTitle', 'EmptyStateDescription',
     'LoadingOverlay', 'LoadingText', 'NoSelectionPanel', 'DetailPanel', 'DetailDeviceName',
     'DetailPrimaryUser', 'DetailUserPrincipalName', 'DetailLapsBadge', 'DetailLapsDot', 'DetailBitLockerBadge', 'OpenIntuneButton', 'OpenEntraButton', 'EntraOnlyNotice',
@@ -1868,9 +1846,9 @@ function Update-FilteredCount {
     $bitLockerReadyCount = @($script:AllDevices | Where-Object BitLockerAvailable).Count
     $entraOnlyCount = @($script:AllDevices | Where-Object IsEntraOnly).Count
     $EntraOnlyFilterCount.Text = [string]$entraOnlyCount
-    $EntraOnlyFilterButton.Visibility = if ($entraOnlyCount -gt 0) { 'Visible' } else { 'Collapsed' }
-    if ($entraOnlyCount -eq 0 -and $EntraOnlyFilterButton.IsChecked -eq $true) {
-        $EntraOnlyFilterButton.IsChecked = $false
+    $EntraOnlyFilterContainer.Visibility = if ($entraOnlyCount -gt 0) { 'Visible' } else { 'Collapsed' }
+    if ($entraOnlyCount -eq 0 -and $EntraOnlyCheckBox.IsChecked -eq $true) {
+        $EntraOnlyCheckBox.IsChecked = $false
     }
     $countParts = [System.Collections.Generic.List[string]]::new()
     $countParts.Add("$visibleCount shown")
@@ -1931,7 +1909,7 @@ function Set-DeviceInventory {
         $query = $SearchBox.Text.Trim().ToLowerInvariant()
         $matchesSearch = [string]::IsNullOrWhiteSpace($query) -or ([string]$item.SearchText).Contains($query)
         $matchesReady = $OnlyReadyCheckBox.IsChecked -ne $true -or [bool]$item.RecoveryAvailable
-        $matchesManagement = $EntraOnlyFilterButton.IsChecked -ne $true -or [bool]$item.IsEntraOnly
+        $matchesManagement = $EntraOnlyCheckBox.IsChecked -ne $true -or [bool]$item.IsEntraOnly
         return $matchesSearch -and $matchesReady -and $matchesManagement
     }
 
@@ -2333,20 +2311,10 @@ $SearchBox.Add_LostKeyboardFocus({
     }
 })
 $ClearSearchButton.Add_Click({ $SearchBox.Clear(); $SearchBox.Focus() })
-$OnlyReadyCheckBox.Add_Checked({
-    if ($OnlyReadyCheckBox.IsChecked -eq $true -and $EntraOnlyFilterButton.IsChecked -eq $true) {
-        $EntraOnlyFilterButton.IsChecked = $false
-    }
-    Refresh-DeviceFilter
-})
+$OnlyReadyCheckBox.Add_Checked({ Refresh-DeviceFilter })
 $OnlyReadyCheckBox.Add_Unchecked({ Refresh-DeviceFilter })
-$EntraOnlyFilterButton.Add_Checked({
-    if ($EntraOnlyFilterButton.IsChecked -eq $true -and $OnlyReadyCheckBox.IsChecked -eq $true) {
-        $OnlyReadyCheckBox.IsChecked = $false
-    }
-    Refresh-DeviceFilter
-})
-$EntraOnlyFilterButton.Add_Unchecked({ Refresh-DeviceFilter })
+$EntraOnlyCheckBox.Add_Checked({ Refresh-DeviceFilter })
+$EntraOnlyCheckBox.Add_Unchecked({ Refresh-DeviceFilter })
 $DeviceGrid.Add_SelectionChanged({ Update-DetailPanel })
 $OpenIntuneButton.Add_Click({ Open-SelectedDevicePortal -Portal Intune })
 $OpenEntraButton.Add_Click({ Open-SelectedDevicePortal -Portal Entra })
