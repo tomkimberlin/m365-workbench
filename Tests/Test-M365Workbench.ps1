@@ -276,6 +276,7 @@ Assert-True -Condition ($mainSource.Contains("`$appUserModelId = '$expectedAppUs
 Assert-True -Condition ($mainSource.Contains('x:Name="EntraOnlyFilterContainer"') -and $mainSource.Contains('x:Name="EntraOnlyCheckBox"') -and $mainSource.Contains('Style="{StaticResource FilterCheckBox}"') -and $mainSource.Contains('ManagementStateDescription')) -Name 'Entra-only and recovery-ready options use the same checkbox filter pattern'
 Assert-True -Condition (-not $mainSource.Contains('ManagementFilterButton') -and -not $mainSource.Contains('$OnlyReadyCheckBox.IsChecked = $false')) -Name 'Checkbox filters combine independently without hidden mutual exclusion'
 Assert-True -Condition ($mainSource.Contains('x:Name="DeviceTableOutline"') -and $mainSource.Contains('x:Name="DeviceCellFrame"') -and $mainSource.Contains('GridLinesVisibility="None"') -and $mainSource.Contains('BorderBrush="#D8E1EC"') -and $mainSource.Contains('BorderThickness="0,0,1,0"')) -Name 'Every device cell owns a deterministic right separator independent of DataGrid focus state'
+Assert-True -Condition ($mainSource.Contains('x:Name="DeviceTableSurface"') -and $mainSource.Contains('$DeviceTableSurface.Add_SizeChanged') -and $mainSource.Contains('[System.Windows.Media.RectangleGeometry]::new($bounds, 10, 10)')) -Name 'Device table content is clipped to the same radius as its rounded outline'
 Assert-True -Condition ($mainSource.Contains('<Style TargetType="DataGridCell">') -and $mainSource.Contains('<Setter Property="BorderThickness" Value="0"/>') -and $mainSource.Contains('<Setter Property="FocusVisualStyle" Value="{x:Null}"/>')) -Name 'Full-row selection does not draw a misleading per-cell focus outline'
 Assert-True -Condition ($mainSource.Contains('$window.ShowInTaskbar = $false') -and $mainSource.Contains('$window.ShowActivated = $false') -and $mainSource.Contains('[System.Windows.SystemParameters]::VirtualScreenLeft - $window.Width - 100')) -Name 'Rendered visual previews stay off-screen and out of the taskbar'
 Assert-True -Condition ($mainSource.Contains('x:Key="DeviceListScrollThumbBrush"') -and $mainSource.Contains('x:Name="DeviceListVerticalThumb"') -and $mainSource.Contains('x:Name="DeviceListHorizontalThumb"') -and $mainSource.Contains('ScrollBar.PageLeftCommand') -and $mainSource.Contains('ScrollBar.PageRightCommand')) -Name 'Device list uses inset arrow-free scrollbars in both orientations'
@@ -299,6 +300,7 @@ $visualPreviewOutput = & $powerShellExecutable -NoLogo -NoProfile -NonInteractiv
 $visualPreviewExitCode = $LASTEXITCODE
 Assert-True -Condition ($visualPreviewExitCode -eq 0 -and (Test-Path -LiteralPath $visualPreviewTestPath -PathType Leaf)) -Name 'Off-screen demo preview renders successfully'
 $separatorPixelsAreStable = $false
+$tableCornerIsClean = $false
 if ($visualPreviewExitCode -eq 0 -and (Test-Path -LiteralPath $visualPreviewTestPath -PathType Leaf)) {
     Add-Type -AssemblyName System.Drawing
     $visualPreview = [System.Drawing.Bitmap]::FromFile($visualPreviewTestPath)
@@ -316,6 +318,7 @@ if ($visualPreviewExitCode -eq 0 -and (Test-Path -LiteralPath $visualPreviewTest
             )
         }
         $selectionColor = [System.Drawing.Color]::FromArgb(232, 241, 255).ToArgb()
+        $windowBackgroundColor = [System.Drawing.Color]::FromArgb(245, 247, 251).ToArgb()
         $selectedRowPixels = @(
             0..($visualPreview.Height - 1) |
                 Where-Object { $visualPreview.GetPixel(100, $_).ToArgb() -eq $selectionColor }
@@ -324,6 +327,16 @@ if ($visualPreviewExitCode -eq 0 -and (Test-Path -LiteralPath $visualPreviewTest
             $selectedRowTop = $selectedRowPixels[0]
             $selectedRowSampleY = $selectedRowTop + 24
             $headerSampleY = $selectedRowTop - 20
+            $detailGapStart = @(
+                ([Math]::Floor($visualPreview.Width * 0.65))..([Math]::Floor($visualPreview.Width * 0.8)) |
+                    Where-Object { $visualPreview.GetPixel($_, $headerSampleY).ToArgb() -eq $windowBackgroundColor } |
+                    Select-Object -First 1
+            )
+            if ($detailGapStart.Count -eq 1) {
+                $tableCornerSampleX = $detailGapStart[0] - 2
+                $tableCornerSampleY = $selectedRowTop - 41
+                $tableCornerIsClean = $visualPreview.GetPixel($tableCornerSampleX, $tableCornerSampleY).ToArgb() -eq $windowBackgroundColor
+            }
             $headerSeparatorPixels = @(
                 100..([Math]::Floor($visualPreview.Width * 0.72)) |
                     Where-Object {
@@ -353,6 +366,7 @@ if ($visualPreviewExitCode -eq 0 -and (Test-Path -LiteralPath $visualPreviewTest
     }
 }
 Assert-True -Condition $separatorPixelsAreStable -Name 'Focused recovery cell preserves every selected-row column separator in the rendered preview'
+Assert-True -Condition $tableCornerIsClean -Name 'Rounded device table does not expose rectangular child backgrounds at its corners'
 $xamlMatch = [regex]::Match($mainSource, "(?s)\`$xaml = @'\r?\n(?<xaml>.*?)\r?\n'@")
 Assert-True -Condition $xamlMatch.Success -Name 'Embedded WPF markup is discoverable for validation'
 $xamlIsValidXml = $false

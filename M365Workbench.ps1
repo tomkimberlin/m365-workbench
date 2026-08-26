@@ -604,7 +604,7 @@ $xaml = @'
       <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="330"/></Grid.ColumnDefinitions>
 
       <Grid Grid.Column="0" Margin="0,0,14,0">
-        <Border Background="White" CornerRadius="10" ClipToBounds="True">
+        <Border x:Name="DeviceTableSurface" Background="White" CornerRadius="10" ClipToBounds="True">
           <Grid>
           <DataGrid x:Name="DeviceGrid"
                     AutoGenerateColumns="False"
@@ -1100,7 +1100,7 @@ $windowHandle = [System.Windows.Interop.WindowInteropHelper]::new($window).Ensur
 
 $controlNames = @(
     'AuthDot', 'AuthStatusText', 'SignInButton', 'SearchBox', 'SearchHint', 'ClearSearchButton',
-    'EntraOnlyFilterContainer', 'EntraOnlyCheckBox', 'EntraOnlyFilterCount', 'OnlyReadyCheckBox', 'RefreshButton', 'RefreshButtonText', 'DeviceGrid', 'EmptyState',
+    'EntraOnlyFilterContainer', 'EntraOnlyCheckBox', 'EntraOnlyFilterCount', 'OnlyReadyCheckBox', 'RefreshButton', 'RefreshButtonText', 'DeviceTableSurface', 'DeviceGrid', 'EmptyState',
     'EmptyStateTitle', 'EmptyStateDescription',
     'LoadingOverlay', 'LoadingText', 'NoSelectionPanel', 'DetailPanel', 'DetailDeviceName',
     'DetailPrimaryUser', 'DetailUserPrincipalName', 'DetailLapsBadge', 'DetailLapsDot', 'DetailBitLockerBadge', 'OpenIntuneButton', 'OpenEntraButton', 'EntraOnlyNotice',
@@ -2335,6 +2335,18 @@ $OnlyReadyCheckBox.Add_Checked({ Refresh-DeviceFilter })
 $OnlyReadyCheckBox.Add_Unchecked({ Refresh-DeviceFilter })
 $EntraOnlyCheckBox.Add_Checked({ Refresh-DeviceFilter })
 $EntraOnlyCheckBox.Add_Unchecked({ Refresh-DeviceFilter })
+$DeviceTableSurface.Add_SizeChanged({
+    param($sender, $eventArgs)
+
+    if ($sender.ActualWidth -le 0 -or $sender.ActualHeight -le 0) {
+        return
+    }
+
+    # Border.CornerRadius rounds its paint but does not clip child controls in WPF.
+    # Apply the same radius as a geometry so the DataGrid cannot bleed into the corners.
+    $bounds = [System.Windows.Rect]::new(0, 0, $sender.ActualWidth, $sender.ActualHeight)
+    $sender.Clip = [System.Windows.Media.RectangleGeometry]::new($bounds, 10, 10)
+})
 $DeviceGrid.Add_PreviewMouseWheel({
     param($sender, $eventArgs)
 
