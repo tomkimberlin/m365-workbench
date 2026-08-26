@@ -279,6 +279,7 @@ Assert-True -Condition ($mainSource.Contains('x:Name="DeviceTableOutline"') -and
 Assert-True -Condition ($mainSource.Contains('<Style TargetType="DataGridCell">') -and $mainSource.Contains('<Setter Property="BorderThickness" Value="0"/>') -and $mainSource.Contains('<Setter Property="FocusVisualStyle" Value="{x:Null}"/>')) -Name 'Full-row selection does not draw a misleading per-cell focus outline'
 Assert-True -Condition ($mainSource.Contains('$window.ShowInTaskbar = $false') -and $mainSource.Contains('$window.ShowActivated = $false') -and $mainSource.Contains('[System.Windows.SystemParameters]::VirtualScreenLeft - $window.Width - 100')) -Name 'Rendered visual previews stay off-screen and out of the taskbar'
 Assert-True -Condition ($mainSource.Contains('x:Key="DeviceListScrollThumbBrush"') -and $mainSource.Contains('x:Name="DeviceListVerticalThumb"') -and $mainSource.Contains('x:Name="DeviceListHorizontalThumb"') -and $mainSource.Contains('ScrollBar.PageLeftCommand') -and $mainSource.Contains('ScrollBar.PageRightCommand')) -Name 'Device list uses inset arrow-free scrollbars in both orientations'
+Assert-True -Condition ($mainSource.Contains('$DeviceGrid.Add_PreviewMouseWheel') -and $mainSource.Contains('$DeviceGrid.RowHeight * 0.75') -and $mainSource.Contains('ScrollToVerticalOffset($targetOffset)') -and $mainSource.Contains('VirtualizingPanel.ScrollUnit="Pixel"')) -Name 'Device wheel input uses a bounded sub-row pixel increment while retaining virtualization'
 Assert-True -Condition ($mainSource.Contains('x:Key="RecoveryKeyPicker"') -and $mainSource.Contains('x:Key="RecoveryKeyPickerItem"') -and $mainSource.Contains('x:Name="RecoveryKeyDropDownSurface"') -and $mainSource.Contains('x:Name="RecoveryKeyPickerChevron"') -and $mainSource.Contains('x:Name="RecoveryKeyScrollThumb"') -and $mainSource.Contains('Style="{StaticResource RecoveryKeyPicker}"') -and -not $mainSource.Contains('DisplayMemberPath="SelectorDisplay"')) -Name 'BitLocker recovery selector uses the dedicated modern picker instead of native Windows chrome'
 Assert-True -Condition ($mainSource.Contains('Text="{Binding VolumeDisplay}"') -and $mainSource.Contains('<Run Text="Backed up "/><Run Text="{Binding CreatedDisplay}"/>')) -Name 'Recovery-key choices align volume and backup date as a readable two-line record'
 Assert-True -Condition ($mainSource.Contains('x:Name="DetailDeviceName"') -and -not $mainSource.Contains('Text="&#xE770;"')) -Name 'Device detail header does not imply an unavailable chassis type'
@@ -302,7 +303,18 @@ if ($visualPreviewExitCode -eq 0 -and (Test-Path -LiteralPath $visualPreviewTest
     Add-Type -AssemblyName System.Drawing
     $visualPreview = [System.Drawing.Bitmap]::FromFile($visualPreviewTestPath)
     try {
-        $separatorColor = [System.Drawing.Color]::FromArgb(216, 225, 236).ToArgb()
+        $separatorColor = [System.Drawing.Color]::FromArgb(216, 225, 236)
+        $isSeparatorPixel = {
+            param([System.Drawing.Color]$Pixel)
+
+            # RenderTargetBitmap can blend a one-pixel WPF border at a fractional layout edge.
+            # Keep the assertion sensitive to a missing line without requiring one exact RGB value.
+            return (
+                [Math]::Abs([int]$Pixel.R - [int]$separatorColor.R) -le 16 -and
+                [Math]::Abs([int]$Pixel.G - [int]$separatorColor.G) -le 16 -and
+                [Math]::Abs([int]$Pixel.B - [int]$separatorColor.B) -le 16
+            )
+        }
         $selectionColor = [System.Drawing.Color]::FromArgb(232, 241, 255).ToArgb()
         $selectedRowPixels = @(
             0..($visualPreview.Height - 1) |
@@ -315,9 +327,9 @@ if ($visualPreviewExitCode -eq 0 -and (Test-Path -LiteralPath $visualPreviewTest
             $headerSeparatorPixels = @(
                 100..([Math]::Floor($visualPreview.Width * 0.72)) |
                     Where-Object {
-                        $visualPreview.GetPixel($_, $headerSampleY - 8).ToArgb() -eq $separatorColor -and
-                        $visualPreview.GetPixel($_, $headerSampleY).ToArgb() -eq $separatorColor -and
-                        $visualPreview.GetPixel($_, $headerSampleY + 8).ToArgb() -eq $separatorColor
+                        (& $isSeparatorPixel $visualPreview.GetPixel($_, $headerSampleY - 8)) -and
+                        (& $isSeparatorPixel $visualPreview.GetPixel($_, $headerSampleY)) -and
+                        (& $isSeparatorPixel $visualPreview.GetPixel($_, $headerSampleY + 8))
                     }
             )
             $headerSeparatorStarts = @()
@@ -331,7 +343,7 @@ if ($visualPreviewExitCode -eq 0 -and (Test-Path -LiteralPath $visualPreviewTest
             $internalSeparatorXs = @($headerSeparatorStarts | Select-Object -First 5)
             $missingSelectedRowSeparators = @(
                 $internalSeparatorXs |
-                    Where-Object { $visualPreview.GetPixel($_, $selectedRowSampleY).ToArgb() -ne $separatorColor }
+                    Where-Object { -not (& $isSeparatorPixel $visualPreview.GetPixel($_, $selectedRowSampleY)) }
             )
             $separatorPixelsAreStable = $internalSeparatorXs.Count -eq 5 -and $missingSelectedRowSeparators.Count -eq 0
         }

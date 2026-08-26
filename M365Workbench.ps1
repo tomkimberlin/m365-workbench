@@ -1147,6 +1147,7 @@ $script:PendingBitLockerAction = $null
 $script:ActiveRecoveryTab = 'LAPS'
 $script:ToastExpiresAt = [DateTimeOffset]::MinValue
 $script:SelectionChanging = $false
+$script:DeviceScrollViewer = $null
 
 $authOperationScript = @'
 param($TenantId, $ExpectedTenantObjectId, $ExpectedAccount, $RequiredScopes, $CoreModulePath, $MinimumGraphVersion)
@@ -1375,6 +1376,25 @@ param($DeviceId, $RecoveryKeyId, $CoreModulePath)
     }
 }
 '@
+
+function Find-DeviceScrollViewer {
+    param([Parameter(Mandatory)][System.Windows.DependencyObject]$Parent)
+
+    if ($Parent -is [System.Windows.Controls.ScrollViewer]) {
+        return $Parent
+    }
+
+    $childCount = [System.Windows.Media.VisualTreeHelper]::GetChildrenCount($Parent)
+    for ($index = 0; $index -lt $childCount; $index++) {
+        $child = [System.Windows.Media.VisualTreeHelper]::GetChild($Parent, $index)
+        $viewer = Find-DeviceScrollViewer -Parent $child
+        if ($null -ne $viewer) {
+            return $viewer
+        }
+    }
+
+    return $null
+}
 
 function Set-AppStatus {
     param(
@@ -2315,6 +2335,29 @@ $OnlyReadyCheckBox.Add_Checked({ Refresh-DeviceFilter })
 $OnlyReadyCheckBox.Add_Unchecked({ Refresh-DeviceFilter })
 $EntraOnlyCheckBox.Add_Checked({ Refresh-DeviceFilter })
 $EntraOnlyCheckBox.Add_Unchecked({ Refresh-DeviceFilter })
+$DeviceGrid.Add_PreviewMouseWheel({
+    param($sender, $eventArgs)
+
+    if ($eventArgs.Delta -eq 0) {
+        return
+    }
+
+    if ($null -eq $script:DeviceScrollViewer) {
+        $script:DeviceScrollViewer = Find-DeviceScrollViewer -Parent $DeviceGrid
+    }
+    if ($null -eq $script:DeviceScrollViewer) {
+        return
+    }
+
+    # WPF can interpret one wheel detent as several complete DataGrid rows.
+    # Scale the raw wheel delta to three quarters of a row for precise, smooth movement.
+    $pixelsPerDetent = [double]$DeviceGrid.RowHeight * 0.75
+    $scrollDelta = ([double]$eventArgs.Delta / 120.0) * $pixelsPerDetent
+    $maximumOffset = [Math]::Max(0.0, $script:DeviceScrollViewer.ExtentHeight - $script:DeviceScrollViewer.ViewportHeight)
+    $targetOffset = [Math]::Max(0.0, [Math]::Min($maximumOffset, $script:DeviceScrollViewer.VerticalOffset - $scrollDelta))
+    $script:DeviceScrollViewer.ScrollToVerticalOffset($targetOffset)
+    $eventArgs.Handled = $true
+})
 $DeviceGrid.Add_SelectionChanged({ Update-DetailPanel })
 $OpenIntuneButton.Add_Click({ Open-SelectedDevicePortal -Portal Intune })
 $OpenEntraButton.Add_Click({ Open-SelectedDevicePortal -Portal Entra })
