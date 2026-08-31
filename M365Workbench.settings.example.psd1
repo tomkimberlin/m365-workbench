@@ -19,5 +19,10 @@
     GraphModuleMinimumVersion = '2.38.0'
     ClipboardClearSeconds     = 45
     RevealSeconds             = 20
+    # Preferred uses Windows Hello/PIN/biometric first, then a fresh Microsoft
+    # device-code verification when local verification is unavailable.
+    # Required permits local Windows verification only. Disabled is an explicit opt-out.
+    SecretVerificationMode    = 'Preferred'
+    SecretVerificationSeconds = 600
     OnlyRecoveryReadyByDefault = $true
 }

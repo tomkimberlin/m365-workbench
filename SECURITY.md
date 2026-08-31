@@ -26,6 +26,10 @@ Use `contoso.com`, `contoso.onmicrosoft.com`, reserved example identifiers, and 
 ## Design requirements
 
 - Retrieve recovery secrets only after an explicit per-device operator action.
+- Require a current user-verification grant before either retrieving or reusing recovery material; fail closed for cancellation, timeout, errors, and identity mismatch.
+- Keep verification grants fixed-duration and process-memory-only, and revoke them on Windows session lock or disconnect.
+- Treat Windows user verification as local user presence, not proof of the Microsoft Graph identity or Entra MFA.
+- Treat Microsoft device-code verification as an interactive fallback whose MFA requirements are determined by Conditional Access.
 - Keep inventory metadata-only; never request LAPS passwords or BitLocker key values during refresh.
 - Never implement bulk secret export.
 - Keep read-only inventory permissions separate from future write or device-action permissions.

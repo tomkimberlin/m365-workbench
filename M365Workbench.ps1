@@ -2,7 +2,9 @@
 param(
     [switch]$DemoMode,
     [switch]$NoAutoConnect,
-    [string]$RenderPreviewPath
+    [string]$RenderPreviewPath,
+    [ValidateSet('Workspace', 'MicrosoftVerification')]
+    [string]$RenderPreviewState = 'Workspace'
 )
 
 Set-StrictMode -Version Latest
@@ -12,6 +14,7 @@ $appRoot = $PSScriptRoot
 $settingsPath = Join-Path $appRoot 'M365Workbench.settings.psd1'
 $coreModulePath = Join-Path $appRoot 'M365Workbench.Core.psm1'
 $secureClipboardPath = Join-Path $appRoot 'SecureClipboard.cs'
+$windowsHelloPath = Join-Path $appRoot 'WindowsHelloVerifier.cs'
 $iconPath = Join-Path $appRoot 'assets\M365Workbench.ico'
 $shellIdentityPath = Join-Path $appRoot 'assets\WindowsShellIdentity.cs'
 $appUserModelId = 'M365Workbench.Desktop'
@@ -25,10 +28,7 @@ Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName WindowsBase
 
-if (Test-Path -LiteralPath $settingsPath -PathType Leaf) {
-    $settings = Import-PowerShellDataFile -LiteralPath $settingsPath
-}
-elseif ($DemoMode) {
+if ($DemoMode) {
     $settings = @{
         TenantId                  = 'contoso.onmicrosoft.com'
         TenantObjectId            = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
@@ -43,16 +43,45 @@ elseif ($DemoMode) {
         GraphModuleMinimumVersion = '2.38.0'
         ClipboardClearSeconds     = 45
         RevealSeconds             = 20
+        SecretVerificationMode    = 'Preferred'
+        SecretVerificationSeconds = 600
         OnlyRecoveryReadyByDefault = $true
     }
+}
+elseif (Test-Path -LiteralPath $settingsPath -PathType Leaf) {
+    $settings = Import-PowerShellDataFile -LiteralPath $settingsPath
 }
 else {
     throw "Configuration file not found. Copy 'M365Workbench.settings.example.psd1' to 'M365Workbench.settings.psd1' and enter your tenant settings."
 }
+
+$secretVerificationMode = if ($settings.ContainsKey('SecretVerificationMode')) {
+    [string]$settings.SecretVerificationMode
+}
+else {
+    'Preferred'
+}
+if ($secretVerificationMode -notin @('Preferred', 'Required', 'Disabled')) {
+    throw "SecretVerificationMode must be Preferred, Required, or Disabled."
+}
+
+$secretVerificationSeconds = if ($settings.ContainsKey('SecretVerificationSeconds')) {
+    [int]$settings.SecretVerificationSeconds
+}
+else {
+    600
+}
+if ($secretVerificationSeconds -lt 60 -or $secretVerificationSeconds -gt 3600) {
+    throw 'SecretVerificationSeconds must be between 60 and 3600.'
+}
+
 Import-Module $coreModulePath -Force
 
 if ($null -eq ('M365Workbench.Security.SecureClipboard' -as [type])) {
     Add-Type -Path $secureClipboardPath
+}
+if ($null -eq ('M365Workbench.Security.WindowsHelloVerifier' -as [type])) {
+    Add-Type -Path $windowsHelloPath
 }
 
 if ([Threading.Thread]::CurrentThread.GetApartmentState() -ne [Threading.ApartmentState]::STA) {
@@ -1024,7 +1053,7 @@ $xaml = @'
         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
           <TextBlock Text="&#xE72E;" FontFamily="Segoe MDL2 Assets" FontSize="11" Foreground="#64748B" Margin="0,0,8,0" VerticalAlignment="Center"/>
           <ProgressBar x:Name="BusyIndicator" Width="64" Height="3" IsIndeterminate="True" Foreground="{StaticResource PrimaryBrush}" Visibility="Collapsed" Margin="0,0,10,0"/>
-          <TextBlock x:Name="FooterStatusText" Text="Starting..." Foreground="#64748B" FontSize="12" VerticalAlignment="Center"/>
+          <TextBlock x:Name="FooterStatusText" Text="Starting..." Foreground="#64748B" FontSize="12" VerticalAlignment="Center" AutomationProperties.Name="Application status" AutomationProperties.LiveSetting="Polite"/>
         </StackPanel>
         <TextBlock x:Name="DeviceCountText" Grid.Column="1" Foreground="#64748B" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"/>
       </Grid>
@@ -1037,12 +1066,12 @@ $xaml = @'
         <Border Width="20" Height="20" CornerRadius="10" Background="#20FFFFFF" VerticalAlignment="Top">
           <TextBlock x:Name="ToastIcon" Text="✓" Foreground="White" FontSize="12" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
         </Border>
-        <TextBlock x:Name="ToastText" Grid.Column="1" Foreground="White" FontSize="12.5" FontWeight="SemiBold" MaxWidth="400" TextWrapping="Wrap" VerticalAlignment="Center"/>
+        <TextBlock x:Name="ToastText" Grid.Column="1" Foreground="White" FontSize="12.5" FontWeight="SemiBold" MaxWidth="400" TextWrapping="Wrap" VerticalAlignment="Center" AutomationProperties.Name="Notification" AutomationProperties.LiveSetting="Assertive"/>
       </Grid>
     </Border>
 
-    <Border x:Name="AuthOverlay" Grid.RowSpan="4" Panel.ZIndex="50" Background="#EAF5F7FB" Visibility="Collapsed">
-      <Border Background="White" BorderBrush="#CFD8E5" BorderThickness="1" CornerRadius="14" Padding="28" Width="560" HorizontalAlignment="Center" VerticalAlignment="Center">
+    <Border x:Name="AuthOverlay" Grid.RowSpan="4" Panel.ZIndex="50" Background="#EAF5F7FB" Visibility="Collapsed" Focusable="True" AutomationProperties.Name="Microsoft authentication dialog" KeyboardNavigation.TabNavigation="Cycle" KeyboardNavigation.ControlTabNavigation="Cycle" KeyboardNavigation.DirectionalNavigation="Cycle">
+      <Border Background="White" BorderBrush="#CFD8E5" BorderThickness="1" CornerRadius="14" Padding="28" Width="560" HorizontalAlignment="Center" VerticalAlignment="Center" KeyboardNavigation.TabNavigation="Cycle" KeyboardNavigation.ControlTabNavigation="Cycle" KeyboardNavigation.DirectionalNavigation="Cycle">
         <Border.Effect><DropShadowEffect Color="#260F172A" BlurRadius="24" ShadowDepth="6" Opacity="0.55"/></Border.Effect>
         <StackPanel>
           <Grid>
@@ -1051,16 +1080,16 @@ $xaml = @'
               <TextBlock Text="&#xE72E;" FontFamily="Segoe MDL2 Assets" FontSize="18" Foreground="#2563EB" HorizontalAlignment="Center" VerticalAlignment="Center"/>
             </Border>
             <StackPanel Grid.Column="1" VerticalAlignment="Center">
-              <TextBlock Text="Secure Microsoft sign-in" FontSize="21" FontWeight="SemiBold" Foreground="{StaticResource TextBrush}"/>
-              <TextBlock Text="One sign-in connects the full session" Foreground="#64748B" FontSize="12" Margin="0,3,0,0"/>
+              <TextBlock x:Name="AuthOverlayTitle" Text="Microsoft sign-in" FontSize="21" FontWeight="SemiBold" Foreground="{StaticResource TextBrush}" TextWrapping="Wrap"/>
+              <TextBlock x:Name="AuthOverlaySubtitle" Text="Connect to load devices" Foreground="#64748B" FontSize="12" Margin="0,3,0,0" TextWrapping="Wrap"/>
             </StackPanel>
           </Grid>
-          <TextBlock Text="Use the approved administrator account and complete authentication with the YubiKey/security key—not the Windows sign-in PIN." TextWrapping="Wrap" Foreground="#64748B" Margin="0,16,0,12" LineHeight="18"/>
+          <TextBlock x:Name="AuthOverlayInstruction" Text="Use the configured administrator account and follow your organization's sign-in requirements." TextWrapping="Wrap" Foreground="#64748B" Margin="0,16,0,12" LineHeight="18"/>
           <Border Background="#F8FAFC" BorderBrush="#E2E8F0" BorderThickness="1" CornerRadius="8" Padding="11,8" Margin="0,0,0,14">
             <Grid>
               <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
               <Ellipse Width="7" Height="7" Fill="#2563EB" Margin="0,0,8,0" VerticalAlignment="Center"/>
-              <TextBlock x:Name="AuthExpectedAccountText" Grid.Column="1" Text="Administrator account" Foreground="#334155" FontSize="11.5" FontWeight="SemiBold"/>
+              <TextBlock x:Name="AuthExpectedAccountText" Grid.Column="1" Text="Administrator account" Foreground="#334155" FontSize="11.5" FontWeight="SemiBold" TextWrapping="Wrap"/>
             </Grid>
           </Border>
           <Border Background="#EEF4FF" BorderBrush="#DBEAFE" BorderThickness="1" CornerRadius="10" Padding="18">
@@ -1069,13 +1098,14 @@ $xaml = @'
               <TextBlock x:Name="DeviceCodeText" Text="Waiting for Microsoft..." FontFamily="Cascadia Mono, Consolas" FontSize="28" FontWeight="Bold" Foreground="#172033" HorizontalAlignment="Center" Margin="0,7,0,0"/>
             </StackPanel>
           </Border>
-          <TextBlock x:Name="AuthOverlayStatus" Text="Preparing sign-in..." Foreground="#475569" HorizontalAlignment="Center" Margin="0,12,0,17"/>
+          <TextBlock x:Name="AuthOverlayStatus" Text="Preparing sign-in..." Foreground="#475569" HorizontalAlignment="Stretch" TextAlignment="Center" TextWrapping="Wrap" Margin="0,12,0,17" AutomationProperties.Name="Verification status" AutomationProperties.LiveSetting="Polite"/>
           <Grid>
             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="10"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
             <Button x:Name="CopyCodeButton" Grid.Column="0" Content="Copy code" Style="{StaticResource SecondaryButton}" IsEnabled="False"/>
             <Button x:Name="OpenSignInButton" Grid.Column="2" Content="Open sign-in page" Style="{StaticResource PrimaryButton}" IsEnabled="False"/>
           </Grid>
-          <TextBlock Text="The utility continues automatically after authentication. No password is requested during sign-in." Foreground="#94A3B8" FontSize="10.5" TextAlignment="Center" TextWrapping="Wrap" HorizontalAlignment="Center" Margin="20,14,20,0"/>
+          <Button x:Name="CancelVerificationButton" Content="Cancel verification" Style="{StaticResource SecondaryButton}" Height="34" Margin="0,10,0,0" Visibility="Collapsed" AutomationProperties.Name="Cancel Microsoft verification"/>
+          <TextBlock x:Name="AuthOverlayFooter" Text="M365 Workbench continues automatically after sign-in." Foreground="#94A3B8" FontSize="10.5" TextAlignment="Center" TextWrapping="Wrap" HorizontalAlignment="Center" Margin="20,14,20,0"/>
         </StackPanel>
       </Border>
     </Border>
@@ -1113,8 +1143,8 @@ $controlNames = @(
     'CopyRecoveryKeyButtonText', 'RevealRecoveryKeyButton', 'DetailSerial', 'DetailOperatingSystem',
     'DetailEntraActivity', 'DetailEncrypted', 'DetailOwnership', 'DetailJoinType', 'DetailComplianceDot',
     'DetailCompliance', 'DetailManagementBadge', 'DetailSourceDot', 'DetailSource', 'BusyIndicator', 'FooterStatusText', 'DeviceCountText', 'ToastBorder', 'ToastIcon',
-    'ToastText', 'AuthOverlay', 'AuthExpectedAccountText', 'DeviceCodeText', 'AuthOverlayStatus',
-    'CopyCodeButton', 'OpenSignInButton'
+    'ToastText', 'AuthOverlay', 'AuthOverlayTitle', 'AuthOverlaySubtitle', 'AuthOverlayInstruction', 'AuthExpectedAccountText', 'DeviceCodeText', 'AuthOverlayStatus',
+    'CopyCodeButton', 'OpenSignInButton', 'CancelVerificationButton', 'AuthOverlayFooter'
 )
 
 foreach ($name in $controlNames) {
@@ -1144,6 +1174,20 @@ $script:ClipboardKind = $null
 $script:ClipboardRecoveryKeyId = $null
 $script:PendingCredentialAction = $null
 $script:PendingBitLockerAction = $null
+$script:PendingCredentialVerificationGeneration = $null
+$script:PendingBitLockerVerificationGeneration = $null
+$script:PendingSecretRequest = $null
+$script:LocalVerificationTask = $null
+$script:LocalVerificationCancellation = $null
+$script:MicrosoftVerificationCancelEvent = $null
+$script:SecretVerifiedUntil = [DateTimeOffset]::MinValue
+$script:RecentInteractiveAuthenticationUntil = [DateTimeOffset]::MinValue
+$script:SecretVerifiedDeadlineTimestamp = [int64]0
+$script:RecentInteractiveAuthenticationDeadlineTimestamp = [int64]0
+$script:SecretVerificationGeneration = 0
+$script:VerificationStateLock = [object]::new()
+$script:AuthenticationDeviceCodeObserved = $false
+$script:AuthenticationVerificationGeneration = $null
 $script:ActiveRecoveryTab = 'LAPS'
 $script:ToastExpiresAt = [DateTimeOffset]::MinValue
 $script:SelectionChanging = $false
@@ -1198,6 +1242,215 @@ param($TenantId, $ExpectedTenantObjectId, $ExpectedAccount, $RequiredScopes, $Co
         if ($_.Exception.PSObject.Properties['ResponseStatusCode']) { $statusCode = [int]$_.Exception.ResponseStatusCode }
         $errorCode = if ($_.Exception.PSObject.Properties['ErrorCode']) { [string]$_.Exception.ErrorCode } else { [string]$_.FullyQualifiedErrorId }
         [pscustomobject]@{ Kind = 'Error'; ErrorCode = $errorCode; Message = [string]$_.Exception.Message; StatusCode = $statusCode }
+    }
+}
+'@
+
+$microsoftVerificationChildScript = @'
+$ErrorActionPreference = 'Stop'
+$InformationPreference = 'Continue'
+$ProgressPreference = 'SilentlyContinue'
+$config = $null
+
+function Write-VerificationResult {
+    param(
+        [Parameter(Mandatory)][string]$Status,
+        [Parameter(Mandatory)][string]$Nonce,
+        [string]$ErrorCode = ''
+    )
+
+    $payload = [pscustomobject]@{ Status = $Status; ErrorCode = $ErrorCode } | ConvertTo-Json -Compress
+    $encodedPayload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($payload))
+    [Console]::Out.WriteLine("M365WB_VERIFY_RESULT::$Nonce::$encodedPayload")
+    [Console]::Out.Flush()
+}
+
+try {
+    $configJson = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:M365WB_VERIFY_CONFIG))
+    $config = $configJson | ConvertFrom-Json
+    Import-Module ([string]$config.CoreModulePath) -Force
+    Import-Module Microsoft.Graph.Authentication -MinimumVersion ([version]$config.MinimumGraphVersion) -ErrorAction Stop
+
+    Connect-MgGraph `
+        -TenantId ([string]$config.TenantId) `
+        -UseDeviceCode `
+        -Scopes ([string[]]$config.RequiredScopes) `
+        -ContextScope Process `
+        -NoWelcome `
+        -ErrorAction Stop 6>&1 |
+        ForEach-Object {
+            [Console]::Out.WriteLine([string]$_)
+            [Console]::Out.Flush()
+        }
+
+    $context = Get-MgContext
+    $validation = Test-LapsGraphContext `
+        -Context $context `
+        -ExpectedAccount ([string]$config.ExpectedAccount) `
+        -ExpectedTenantId ([Guid]$config.ExpectedTenantObjectId) `
+        -RequiredScopes ([string[]]$config.RequiredScopes)
+
+    if (-not $validation.IsValid) {
+        Write-VerificationResult -Status 'Rejected' -Nonce ([string]$config.Nonce) -ErrorCode ([string]$validation.Reason)
+        exit 3
+    }
+
+    Write-VerificationResult -Status 'Verified' -Nonce ([string]$config.Nonce)
+    exit 0
+}
+catch {
+    $errorCode = if ($_.Exception.PSObject.Properties['ErrorCode']) { [string]$_.Exception.ErrorCode } else { 'ConnectionFailed' }
+    try {
+        if ($null -ne $config -and -not [string]::IsNullOrWhiteSpace([string]$config.Nonce)) {
+            Write-VerificationResult -Status 'Failed' -Nonce ([string]$config.Nonce) -ErrorCode $errorCode
+        }
+    }
+    catch { }
+    exit 2
+}
+'@
+
+$microsoftVerificationOperationScript = @'
+param($TenantId, $ExpectedTenantObjectId, $ExpectedAccount, $RequiredScopes, $CoreModulePath, $MinimumGraphVersion, $PowerShellExecutable, $Nonce, $ChildScript, $CancelEvent, $TimeoutSeconds)
+& {
+    $ErrorActionPreference = 'Stop'
+    Import-Module $CoreModulePath -Force
+
+    $process = $null
+    $canceled = $false
+    $timedOut = $false
+    $deviceCodeObserved = $false
+    $childStatus = $null
+    $childErrorCode = $null
+    try {
+        $config = @{
+            TenantId                = [string]$TenantId
+            ExpectedTenantObjectId  = [string]$ExpectedTenantObjectId
+            ExpectedAccount         = [string]$ExpectedAccount
+            RequiredScopes          = [string[]]$RequiredScopes
+            CoreModulePath          = [string]$CoreModulePath
+            MinimumGraphVersion     = [string]$MinimumGraphVersion
+            Nonce                   = [string]$Nonce
+        }
+        $configJson = $config | ConvertTo-Json -Compress -Depth 4
+        $encodedConfig = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($configJson))
+        $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes([string]$ChildScript))
+
+        $startInfo = [Diagnostics.ProcessStartInfo]::new()
+        $startInfo.FileName = [string]$PowerShellExecutable
+        $startInfo.UseShellExecute = $false
+        $startInfo.CreateNoWindow = $true
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
+        $startInfo.ArgumentList.Add('-NoLogo')
+        $startInfo.ArgumentList.Add('-NoProfile')
+        $startInfo.ArgumentList.Add('-NonInteractive')
+        $startInfo.ArgumentList.Add('-EncodedCommand')
+        $startInfo.ArgumentList.Add($encodedCommand)
+        $startInfo.Environment['M365WB_VERIFY_CONFIG'] = $encodedConfig
+
+        $process = [Diagnostics.Process]::new()
+        $process.StartInfo = $startInfo
+        if (-not $process.Start()) {
+            throw 'The Microsoft verification process could not be started.'
+        }
+
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        $stopwatch = [Diagnostics.Stopwatch]::StartNew()
+        $sentinelPrefix = "M365WB_VERIFY_RESULT::$Nonce::"
+
+        :readLoop while ($true) {
+            if ($CancelEvent.WaitOne(0)) {
+                $canceled = $true
+                try { $process.Kill($true) } catch { }
+                break readLoop
+            }
+            if ($stopwatch.Elapsed.TotalSeconds -ge [double]$TimeoutSeconds) {
+                $timedOut = $true
+                try { $process.Kill($true) } catch { }
+                break readLoop
+            }
+
+            $lineTask = $process.StandardOutput.ReadLineAsync()
+            while (-not $lineTask.Wait(100)) {
+                if ($CancelEvent.WaitOne(0)) {
+                    $canceled = $true
+                    try { $process.Kill($true) } catch { }
+                    break readLoop
+                }
+                if ($stopwatch.Elapsed.TotalSeconds -ge [double]$TimeoutSeconds) {
+                    $timedOut = $true
+                    try { $process.Kill($true) } catch { }
+                    break readLoop
+                }
+            }
+
+            $line = $lineTask.GetAwaiter().GetResult()
+            if ($null -eq $line) {
+                break
+            }
+
+            $deviceCode = Get-DeviceCodeFromMessage -Message $line
+            if ($null -ne $deviceCode) {
+                $deviceCodeObserved = $true
+                Write-Output $line
+                continue
+            }
+
+            if ($line.StartsWith($sentinelPrefix, [StringComparison]::Ordinal)) {
+                try {
+                    $encodedPayload = $line.Substring($sentinelPrefix.Length)
+                    $payloadJson = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encodedPayload))
+                    $payload = $payloadJson | ConvertFrom-Json
+                    $childStatus = [string]$payload.Status
+                    $childErrorCode = [string]$payload.ErrorCode
+                }
+                catch {
+                    $childStatus = 'InvalidResult'
+                }
+            }
+        }
+
+        if (-not $process.HasExited) {
+            $null = $process.WaitForExit(5000)
+        }
+
+        if ($CancelEvent.WaitOne(0)) {
+            $canceled = $true
+        }
+
+        if ($canceled) {
+            [pscustomobject]@{ Kind = 'VerificationCanceled' }
+            return
+        }
+        if ($timedOut) {
+            [pscustomobject]@{ Kind = 'VerificationError'; ErrorCode = 'VerificationTimedOut' }
+            return
+        }
+        if ($process.ExitCode -eq 0 -and $childStatus -eq 'Verified' -and $deviceCodeObserved) {
+            [pscustomobject]@{ Kind = 'MicrosoftVerificationResult' }
+            return
+        }
+        if ($process.ExitCode -eq 0 -and $childStatus -eq 'Verified' -and -not $deviceCodeObserved) {
+            [pscustomobject]@{ Kind = 'VerificationError'; ErrorCode = 'InteractiveVerificationNotObserved' }
+            return
+        }
+
+        [pscustomobject]@{
+            Kind = 'VerificationError'
+            ErrorCode = if ([string]::IsNullOrWhiteSpace($childErrorCode)) { 'MicrosoftVerificationFailed' } else { $childErrorCode }
+        }
+    }
+    catch {
+        [pscustomobject]@{ Kind = 'VerificationError'; ErrorCode = 'MicrosoftVerificationFailed' }
+    }
+    finally {
+        if ($null -ne $process) {
+            if (-not $process.HasExited) {
+                try { $process.Kill($true) } catch { }
+            }
+            $process.Dispose()
+        }
     }
 }
 '@
@@ -1604,6 +1857,12 @@ function Set-DeviceCode {
         $script:SignInPageOpenedForCode = $Code
         Open-DeviceSignInPage
     }
+    if ($CancelVerificationButton.Visibility -eq 'Visible') {
+        $null = $CancelVerificationButton.Focus()
+    }
+    else {
+        $null = $OpenSignInButton.Focus()
+    }
 }
 
 function Initialize-GraphWorker {
@@ -1659,22 +1918,458 @@ function Start-GraphOperation {
     return $true
 }
 
-function Start-Authentication {
-    if ($null -ne $script:CurrentOperation) {
+function Restore-SecretActionControls {
+    $selected = Get-SelectedDevice
+    $lapsAvailable = $null -ne $selected -and [bool]$selected.LapsAvailable
+    $bitLockerAvailable = $null -ne $selected -and [bool]$selected.BitLockerAvailable -and $null -ne $BitLockerKeySelector.SelectedItem
+    $CopyPasswordButton.IsEnabled = $lapsAvailable
+    $RevealPasswordButton.IsEnabled = $lapsAvailable
+    $CopyPasswordButtonText.Text = 'Copy password'
+    $CopyRecoveryKeyButton.IsEnabled = $bitLockerAvailable
+    $RevealRecoveryKeyButton.IsEnabled = $bitLockerAvailable
+    $CopyRecoveryKeyButtonText.Text = 'Copy recovery key'
+    $BitLockerKeySelector.IsEnabled = $null -ne $selected -and [bool]$selected.BitLockerAvailable -and @($selected.BitLockerKeys).Count -gt 1
+    $RefreshButton.IsEnabled = $true
+    $SignInButton.IsEnabled = $true
+}
+
+function Set-RecoveryActionFocus {
+    param(
+        [Parameter(Mandatory)][ValidateSet('LAPS', 'BitLocker')][string]$Kind,
+        [Parameter(Mandatory)][ValidateSet('Copy', 'Reveal')][string]$Action
+    )
+
+    $target = if ($Kind -eq 'LAPS') {
+        if ($Action -eq 'Copy') { $CopyPasswordButton } else { $RevealPasswordButton }
+    }
+    else {
+        if ($Action -eq 'Copy') { $CopyRecoveryKeyButton } else { $RevealRecoveryKeyButton }
+    }
+    if ($null -ne $target -and $target.IsEnabled -and $target.IsVisible) {
+        $null = $target.Focus()
+    }
+    else {
+        $null = $DeviceGrid.Focus()
+    }
+}
+
+function Set-SecretActionBusy {
+    param([Parameter(Mandatory)][ValidateSet('LAPS', 'BitLocker')][string]$Kind)
+
+    $CopyPasswordButton.IsEnabled = $false
+    $RevealPasswordButton.IsEnabled = $false
+    $CopyRecoveryKeyButton.IsEnabled = $false
+    $RevealRecoveryKeyButton.IsEnabled = $false
+    $BitLockerKeySelector.IsEnabled = $false
+    $RefreshButton.IsEnabled = $false
+    $SignInButton.IsEnabled = $false
+}
+
+function Get-SecretVerificationSnapshot {
+    [Threading.Monitor]::Enter($script:VerificationStateLock)
+    try {
+        $timestampNow = [Diagnostics.Stopwatch]::GetTimestamp()
+        $verifiedUntil = if ($script:SecretVerifiedDeadlineTimestamp -gt $timestampNow) {
+            $remainingSeconds = [double]($script:SecretVerifiedDeadlineTimestamp - $timestampNow) / [double][Diagnostics.Stopwatch]::Frequency
+            [DateTimeOffset]::Now.AddSeconds($remainingSeconds)
+        }
+        else {
+            [DateTimeOffset]::MinValue
+        }
+        $recentAuthenticationUntil = if ($script:RecentInteractiveAuthenticationDeadlineTimestamp -gt $timestampNow) {
+            $remainingSeconds = [double]($script:RecentInteractiveAuthenticationDeadlineTimestamp - $timestampNow) / [double][Diagnostics.Stopwatch]::Frequency
+            [DateTimeOffset]::Now.AddSeconds($remainingSeconds)
+        }
+        else {
+            [DateTimeOffset]::MinValue
+        }
+        return [pscustomobject]@{
+            Generation = $script:SecretVerificationGeneration
+            VerifiedUntil = $verifiedUntil
+            RecentInteractiveAuthenticationUntil = $recentAuthenticationUntil
+        }
+    }
+    finally {
+        [Threading.Monitor]::Exit($script:VerificationStateLock)
+    }
+}
+
+function Set-SecretVerificationGranted {
+    param([Parameter(Mandatory)][int]$ExpectedGeneration)
+
+    [Threading.Monitor]::Enter($script:VerificationStateLock)
+    try {
+        if ($script:SecretVerificationGeneration -ne $ExpectedGeneration) {
+            return $false
+        }
+        $script:SecretVerifiedUntil = [DateTimeOffset]::Now.AddSeconds($secretVerificationSeconds)
+        $script:SecretVerifiedDeadlineTimestamp = [Diagnostics.Stopwatch]::GetTimestamp() + ([int64]$secretVerificationSeconds * [Diagnostics.Stopwatch]::Frequency)
+        return $true
+    }
+    finally {
+        [Threading.Monitor]::Exit($script:VerificationStateLock)
+    }
+}
+
+function Set-RecentInteractiveAuthentication {
+    param([Parameter(Mandatory)][int]$ExpectedGeneration)
+
+    [Threading.Monitor]::Enter($script:VerificationStateLock)
+    try {
+        if ($script:SecretVerificationGeneration -ne $ExpectedGeneration) {
+            return $false
+        }
+        $script:RecentInteractiveAuthenticationUntil = [DateTimeOffset]::Now.AddSeconds($secretVerificationSeconds)
+        $script:RecentInteractiveAuthenticationDeadlineTimestamp = [Diagnostics.Stopwatch]::GetTimestamp() + ([int64]$secretVerificationSeconds * [Diagnostics.Stopwatch]::Frequency)
+        return $true
+    }
+    finally {
+        [Threading.Monitor]::Exit($script:VerificationStateLock)
+    }
+}
+
+function Use-RecentInteractiveAuthentication {
+    param([Parameter(Mandatory)][int]$ExpectedGeneration)
+
+    [Threading.Monitor]::Enter($script:VerificationStateLock)
+    try {
+        if ($script:SecretVerificationGeneration -ne $ExpectedGeneration -or
+            [Diagnostics.Stopwatch]::GetTimestamp() -ge $script:RecentInteractiveAuthenticationDeadlineTimestamp) {
+            return $false
+        }
+        $script:SecretVerifiedUntil = $script:RecentInteractiveAuthenticationUntil
+        $script:SecretVerifiedDeadlineTimestamp = $script:RecentInteractiveAuthenticationDeadlineTimestamp
+        return $true
+    }
+    finally {
+        [Threading.Monitor]::Exit($script:VerificationStateLock)
+    }
+}
+
+function Test-SecretVerificationGeneration {
+    param([AllowNull()][object]$Generation)
+
+    [Threading.Monitor]::Enter($script:VerificationStateLock)
+    try {
+        if ($null -eq $Generation -or [int]$Generation -ne $script:SecretVerificationGeneration) {
+            return $false
+        }
+        if ($secretVerificationMode -eq 'Disabled') {
+            return $true
+        }
+        return [Diagnostics.Stopwatch]::GetTimestamp() -lt $script:SecretVerifiedDeadlineTimestamp
+    }
+    finally {
+        [Threading.Monitor]::Exit($script:VerificationStateLock)
+    }
+}
+
+function Clear-SecretVerificationState {
+    [Threading.Monitor]::Enter($script:VerificationStateLock)
+    try {
+        $script:SecretVerifiedUntil = [DateTimeOffset]::MinValue
+        $script:RecentInteractiveAuthenticationUntil = [DateTimeOffset]::MinValue
+        $script:SecretVerifiedDeadlineTimestamp = [int64]0
+        $script:RecentInteractiveAuthenticationDeadlineTimestamp = [int64]0
+        $script:SecretVerificationGeneration++
+    }
+    finally {
+        [Threading.Monitor]::Exit($script:VerificationStateLock)
+    }
+    if ($null -ne $script:LocalVerificationCancellation) {
+        try { $script:LocalVerificationCancellation.Cancel() } catch { }
+    }
+    if ($null -ne $script:MicrosoftVerificationCancelEvent) {
+        try { $script:MicrosoftVerificationCancelEvent.Set() } catch { }
+    }
+}
+
+function Clear-PendingSecretRequest {
+    $script:PendingSecretRequest = $null
+    if ($null -ne $script:LocalVerificationCancellation) {
+        $script:LocalVerificationCancellation.Dispose()
+        $script:LocalVerificationCancellation = $null
+    }
+    $script:LocalVerificationTask = $null
+    if ($null -ne $script:MicrosoftVerificationCancelEvent) {
+        $script:MicrosoftVerificationCancelEvent.Dispose()
+        $script:MicrosoftVerificationCancelEvent = $null
+    }
+    Restore-SecretActionControls
+}
+
+function Stop-SecretVerification {
+    Clear-SecretVerificationState
+    $CancelVerificationButton.IsEnabled = $false
+    $AuthOverlayStatus.Text = 'Canceling verification...'
+}
+
+function Fail-SecretVerification {
+    param(
+        [Parameter(Mandatory)][string]$Message,
+        [switch]$Canceled
+    )
+
+    $request = $script:PendingSecretRequest
+    $AuthOverlay.Visibility = 'Collapsed'
+    $CancelVerificationButton.Visibility = 'Collapsed'
+    $CancelVerificationButton.IsEnabled = $true
+    Clear-PendingSecretRequest
+    Set-AppStatus -Message $Message
+    Show-Toast -Message $Message -Kind $(if ($Canceled) { 'Info' } else { 'Error' })
+    if ($null -ne $request) {
+        Set-RecoveryActionFocus -Kind ([string]$request.Kind) -Action ([string]$request.Action)
+    }
+    else {
+        $null = $DeviceGrid.Focus()
+    }
+}
+
+function Resume-PendingSecretRequest {
+    $request = $script:PendingSecretRequest
+    if ($null -eq $request) {
+        Restore-SecretActionControls
         return
     }
 
+    $selected = Get-SelectedDevice
+    $selectionMatches = $null -ne $selected -and
+        [string]::Equals([string]$selected.EntraDeviceId, [string]$request.DeviceId, [StringComparison]::OrdinalIgnoreCase)
+    if ($selectionMatches -and [string]$request.Kind -eq 'BitLocker') {
+        $selectedKey = $BitLockerKeySelector.SelectedItem
+        $selectionMatches = $null -ne $selectedKey -and
+            [string]::Equals([string]$selectedKey.Id, [string]$request.RecoveryKeyId, [StringComparison]::OrdinalIgnoreCase)
+    }
+
+    $kind = [string]$request.Kind
+    $action = [string]$request.Action
+    $verificationGeneration = [int]$request.VerificationGeneration
+    Clear-PendingSecretRequest
+    if (-not $selectionMatches) {
+        $selectionMessage = 'The selection changed, so no recovery data was retrieved.'
+        Set-AppStatus -Message $selectionMessage
+        Show-Toast -Message $selectionMessage -Kind Info
+        $null = $DeviceGrid.Focus()
+        return
+    }
+
+    if ($kind -eq 'LAPS') {
+        Invoke-CredentialAction -Action $action -VerificationGranted -VerificationGeneration $verificationGeneration
+    }
+    else {
+        Invoke-BitLockerAction -Action $action -VerificationGranted -VerificationGeneration $verificationGeneration
+    }
+}
+
+function Start-MicrosoftSecretVerification {
+    if ($null -eq $script:PendingSecretRequest -or $null -ne $script:CurrentOperation) {
+        Fail-SecretVerification -Message 'Microsoft verification could not start. Try the recovery action again.'
+        return
+    }
+    $verificationSnapshot = Get-SecretVerificationSnapshot
+    if ([int]$script:PendingSecretRequest.VerificationGeneration -ne [int]$verificationSnapshot.Generation) {
+        Fail-SecretVerification -Message 'The Windows session changed, so verification was canceled.' -Canceled
+        return
+    }
+
+    $script:MicrosoftVerificationCancelEvent = [Threading.EventWaitHandle]::new($false, [Threading.EventResetMode]::ManualReset)
+    $nonce = [Guid]::NewGuid().ToString('N')
+    $AuthOverlayTitle.Text = 'Verify with Microsoft'
+    $AuthOverlaySubtitle.Text = 'Required before accessing recovery data'
+    $AuthOverlayInstruction.Text = "Windows verification is not available. Complete Microsoft sign-in as the configured administrator account."
+    $AuthOverlayFooter.Text = "Your organization's sign-in policy determines which verification methods are required."
+    $AuthOverlay.Visibility = 'Visible'
+    $DeviceCodeText.Text = 'Waiting for Microsoft...'
+    $AuthOverlayStatus.Text = 'Preparing verification...'
+    $CopyCodeButton.IsEnabled = $false
+    $OpenSignInButton.IsEnabled = $false
+    $CancelVerificationButton.Visibility = 'Visible'
+    $CancelVerificationButton.IsEnabled = $true
+    $script:LastDeviceCode = $null
+    $script:SignInPageOpenedForCode = $null
+    Set-AppStatus -Message 'Waiting for Microsoft verification...' -Busy
+    $null = $CancelVerificationButton.Focus()
+
+    $powerShellExecutable = Join-Path $PSHOME 'pwsh.exe'
+    $started = Start-GraphOperation -Name 'MicrosoftVerification' -ScriptText $microsoftVerificationOperationScript -Arguments @(
+        $settings.TenantId,
+        $settings.TenantObjectId,
+        $settings.ExpectedAccount,
+        [string[]]$settings.RequiredScopes,
+        $coreModulePath,
+        $settings.GraphModuleMinimumVersion,
+        $powerShellExecutable,
+        $nonce,
+        $microsoftVerificationChildScript,
+        $script:MicrosoftVerificationCancelEvent,
+        300
+    )
+    if (-not $started) {
+        Fail-SecretVerification -Message 'Microsoft verification could not start. Try the recovery action again.'
+    }
+}
+
+function Start-LocalSecretVerification {
+    if ($null -eq $script:PendingSecretRequest) {
+        return
+    }
+
+    try {
+        $null = $window.Activate()
+        $script:LocalVerificationCancellation = [Threading.CancellationTokenSource]::new()
+        $script:LocalVerificationTask = [M365Workbench.Security.WindowsHelloVerifier]::VerifyAsync(
+            $windowHandle,
+            'Verify to access recovery data in M365 Workbench.',
+            [M365Workbench.Security.WindowsHelloVerifier]::DefaultTimeoutMilliseconds,
+            $script:LocalVerificationCancellation.Token
+        )
+        Set-AppStatus -Message 'Waiting for Windows verification...' -Busy
+    }
+    catch {
+        Complete-LocalSecretVerification -ForcedResult 'Error'
+    }
+}
+
+function Complete-LocalSecretVerification {
+    param([string]$ForcedResult)
+
+    if ($null -eq $script:PendingSecretRequest) {
+        Clear-PendingSecretRequest
+        return
+    }
+    $expectedGeneration = [int]$script:PendingSecretRequest.VerificationGeneration
+    $verificationSnapshot = Get-SecretVerificationSnapshot
+    if ($expectedGeneration -ne [int]$verificationSnapshot.Generation) {
+        Fail-SecretVerification -Message 'The Windows session changed, so verification was canceled.' -Canceled
+        return
+    }
+
+    $localResult = $ForcedResult
+    if ([string]::IsNullOrWhiteSpace($localResult)) {
+        try {
+            $outcome = $script:LocalVerificationTask.GetAwaiter().GetResult()
+            $localResult = switch ([string]$outcome.State) {
+                'PlatformUnavailable' { 'NotSupported' }
+                default { [string]$outcome.State }
+            }
+        }
+        catch {
+            $localResult = 'Error'
+        }
+    }
+
+    if ($null -ne $script:LocalVerificationCancellation) {
+        $script:LocalVerificationCancellation.Dispose()
+        $script:LocalVerificationCancellation = $null
+    }
+    $script:LocalVerificationTask = $null
+
+    $decision = Get-SecretVerificationDecision `
+        -Mode $secretVerificationMode `
+        -LocalResult $localResult `
+        -VerifiedUntil $verificationSnapshot.VerifiedUntil
+
+    switch ($decision) {
+        'Grant' {
+            if (Set-SecretVerificationGranted -ExpectedGeneration $expectedGeneration) {
+                Resume-PendingSecretRequest
+            }
+            else {
+                Fail-SecretVerification -Message 'The Windows session changed, so verification was canceled.' -Canceled
+            }
+        }
+        'Microsoft' {
+            if (Use-RecentInteractiveAuthentication -ExpectedGeneration $expectedGeneration) {
+                Resume-PendingSecretRequest
+            }
+            else {
+                Start-MicrosoftSecretVerification
+            }
+        }
+        'Retry' {
+            Fail-SecretVerification -Message 'Windows Security is busy. Wait a moment, then try again.'
+        }
+        'Blocked' {
+            Fail-SecretVerification -Message 'Windows verification is required by this configuration but is not available for the current user.'
+        }
+        'Canceled' {
+            Fail-SecretVerification -Message 'Verification canceled. No recovery data was accessed.' -Canceled
+        }
+        'TimedOut' {
+            Fail-SecretVerification -Message 'Windows verification timed out. Try the recovery action again.'
+        }
+        default {
+            Fail-SecretVerification -Message 'Windows could not verify this action. No recovery data was accessed.'
+        }
+    }
+}
+
+function Request-SecretAction {
+    param(
+        [Parameter(Mandatory)][ValidateSet('LAPS', 'BitLocker')][string]$Kind,
+        [Parameter(Mandatory)][ValidateSet('Copy', 'Reveal')][string]$Action
+    )
+
+    if ($null -ne $script:PendingSecretRequest -or $null -ne $script:LocalVerificationTask -or $null -ne $script:CurrentOperation) {
+        return
+    }
+
+    $selected = Get-SelectedDevice
+    if ($null -eq $selected) {
+        return
+    }
+    $selectedKey = if ($Kind -eq 'BitLocker') { $BitLockerKeySelector.SelectedItem } else { $null }
+    if ($Kind -eq 'BitLocker' -and $null -eq $selectedKey) {
+        return
+    }
+
+    $verificationSnapshot = Get-SecretVerificationSnapshot
+    $script:PendingSecretRequest = [pscustomobject]@{
+        Kind          = $Kind
+        Action        = $Action
+        DeviceId      = [string]$selected.EntraDeviceId
+        RecoveryKeyId = if ($null -eq $selectedKey) { $null } else { [string]$selectedKey.Id }
+        VerificationGeneration = [int]$verificationSnapshot.Generation
+    }
+    Set-SecretActionBusy -Kind $Kind
+
+    $decision = Get-SecretVerificationDecision `
+        -Mode $secretVerificationMode `
+        -VerifiedUntil $verificationSnapshot.VerifiedUntil
+    if ($decision -in @('Grant', 'Bypass')) {
+        Resume-PendingSecretRequest
+        return
+    }
+
+    Start-LocalSecretVerification
+}
+
+function Start-Authentication {
+    if ($null -ne $script:CurrentOperation -or $null -ne $script:PendingSecretRequest -or $null -ne $script:LocalVerificationTask) {
+        return
+    }
+
+    $authenticationSnapshot = Get-SecretVerificationSnapshot
+    $script:AuthenticationVerificationGeneration = [int]$authenticationSnapshot.Generation
+
+    $AuthOverlayTitle.Text = 'Microsoft sign-in'
+    $AuthOverlaySubtitle.Text = 'Connect to load devices'
+    $AuthOverlayInstruction.Text = "Use the configured administrator account and follow your organization's sign-in requirements."
+    $AuthOverlayFooter.Text = 'M365 Workbench continues automatically after sign-in.'
     $AuthOverlay.Visibility = 'Visible'
     $DeviceCodeText.Text = 'Waiting for Microsoft...'
     $AuthOverlayStatus.Text = 'Checking for a reusable secure sign-in...'
     $CopyCodeButton.IsEnabled = $false
     $OpenSignInButton.IsEnabled = $false
+    $CancelVerificationButton.Visibility = 'Collapsed'
     $script:LastDeviceCode = $null
     $script:SignInPageOpenedForCode = $null
+    $script:AuthenticationDeviceCodeObserved = $false
+    $null = $AuthOverlay.Focus()
     Set-AppStatus -Message 'Connecting securely to Microsoft Graph...' -Busy
     Set-AuthenticationDisplay -SignedIn $false -Text 'Connecting...'
 
-    $null = Start-GraphOperation -Name 'Authenticate' -ScriptText $authOperationScript -Arguments @(
+    $authenticationStarted = Start-GraphOperation -Name 'Authenticate' -ScriptText $authOperationScript -Arguments @(
         $settings.TenantId,
         $settings.TenantObjectId,
         $settings.ExpectedAccount,
@@ -1682,10 +2377,13 @@ function Start-Authentication {
         $coreModulePath,
         $settings.GraphModuleMinimumVersion
     )
+    if (-not $authenticationStarted) {
+        $script:AuthenticationVerificationGeneration = $null
+    }
 }
 
 function Start-InventoryLoad {
-    if (-not $script:IsSignedIn -or $null -ne $script:CurrentOperation) {
+    if (-not $script:IsSignedIn -or $null -ne $script:CurrentOperation -or $null -ne $script:PendingSecretRequest -or $null -ne $script:LocalVerificationTask) {
         return
     }
 
@@ -1738,6 +2436,12 @@ function Update-BitLockerSelection {
     $CopyRecoveryKeyButton.IsEnabled = $canRetrieve
     $RevealRecoveryKeyButton.IsEnabled = $canRetrieve
     $null = Update-ClipboardStatusForSelection
+    if ($null -ne $script:PendingSecretRequest) {
+        Set-SecretActionBusy -Kind ([string]$script:PendingSecretRequest.Kind)
+    }
+    elseif ($null -ne $script:CurrentOperation -and $script:CurrentOperation.Name -in @('Credential', 'BitLockerKey')) {
+        Set-SecretActionBusy -Kind $(if ($script:CurrentOperation.Name -eq 'Credential') { 'LAPS' } else { 'BitLocker' })
+    }
 }
 
 function Update-DetailPanel {
@@ -1853,6 +2557,12 @@ function Update-DetailPanel {
     }
     Set-RecoveryTab -Tab $targetTab
     $null = Update-ClipboardStatusForSelection
+    if ($null -ne $script:PendingSecretRequest) {
+        Set-SecretActionBusy -Kind ([string]$script:PendingSecretRequest.Kind)
+    }
+    elseif ($null -ne $script:CurrentOperation -and $script:CurrentOperation.Name -in @('Credential', 'BitLockerKey')) {
+        Set-SecretActionBusy -Kind $(if ($script:CurrentOperation.Name -eq 'Credential') { 'LAPS' } else { 'BitLocker' })
+    }
 }
 
 function Update-FilteredCount {
@@ -1965,6 +2675,10 @@ function Complete-CredentialAction {
     $selected = Get-SelectedDevice
     if ($null -eq $selected -or -not [string]::Equals([string]$selected.EntraDeviceId, [string]$Credential.DeviceId, [StringComparison]::OrdinalIgnoreCase)) {
         $Credential.Password = $null
+        Restore-SecretActionControls
+        Set-AppStatus -Message "Ready — signed in as $($settings.ExpectedAccount)"
+        Show-Toast -Message 'The selection changed, so no password was exposed.' -Kind Info
+        Set-RecoveryActionFocus -Kind LAPS -Action $Action
         return
     }
 
@@ -1995,13 +2709,17 @@ function Complete-CredentialAction {
         Set-PasswordStatus -Message "Hides automatically in $($settings.RevealSeconds) seconds" -DotColor '#2563EB' -TextColor '#1D4ED8'
     }
 
-    $CopyPasswordButton.IsEnabled = $true
-    $RevealPasswordButton.IsEnabled = $true
+    Restore-SecretActionControls
     Set-AppStatus -Message "Ready — signed in as $($settings.ExpectedAccount)"
+    Set-RecoveryActionFocus -Kind LAPS -Action $Action
 }
 
 function Invoke-CredentialAction {
-    param([Parameter(Mandatory)][ValidateSet('Copy', 'Reveal')][string]$Action)
+    param(
+        [Parameter(Mandatory)][ValidateSet('Copy', 'Reveal')][string]$Action,
+        [switch]$VerificationGranted,
+        [AllowNull()][Nullable[int]]$VerificationGeneration = $null
+    )
 
     $selected = Get-SelectedDevice
     if ($null -eq $selected -or -not [bool]$selected.LapsAvailable) {
@@ -2027,6 +2745,19 @@ function Invoke-CredentialAction {
         return
     }
 
+    if (-not $VerificationGranted) {
+        Request-SecretAction -Kind LAPS -Action $Action
+        return
+    }
+
+    if (-not (Test-SecretVerificationGeneration -Generation $VerificationGeneration)) {
+        Restore-SecretActionControls
+        Set-AppStatus -Message "Ready — signed in as $($settings.ExpectedAccount)"
+        Show-Toast -Message 'Verification expired or the Windows session changed. No password was accessed.' -Kind Info
+        Set-RecoveryActionFocus -Kind LAPS -Action $Action
+        return
+    }
+
     if ($null -ne $script:CurrentCredential -and
         [string]::Equals($script:CurrentCredentialDeviceId, [string]$selected.EntraDeviceId, [StringComparison]::OrdinalIgnoreCase) -and
         [DateTimeOffset]::Now -lt $script:CredentialExpiresAt) {
@@ -2039,9 +2770,8 @@ function Invoke-CredentialAction {
     }
 
     $script:PendingCredentialAction = $Action
-    $CopyPasswordButton.IsEnabled = $false
-    $RevealPasswordButton.IsEnabled = $false
-    $CopyPasswordButtonText.Text = 'Retrieving...'
+    $script:PendingCredentialVerificationGeneration = [int]$VerificationGeneration
+    Set-SecretActionBusy -Kind LAPS
     Set-AppStatus -Message "Retrieving the current password for $($selected.DeviceName)..." -Busy
     $null = Start-GraphOperation -Name 'Credential' -ScriptText $credentialOperationScript -Arguments @([string]$selected.EntraDeviceId, $coreModulePath)
 }
@@ -2058,6 +2788,10 @@ function Complete-BitLockerAction {
         -not [string]::Equals([string]$selected.EntraDeviceId, [string]$KeyResult.DeviceId, [StringComparison]::OrdinalIgnoreCase) -or
         -not [string]::Equals([string]$selectedKey.Id, [string]$KeyResult.RecoveryKeyId, [StringComparison]::OrdinalIgnoreCase)) {
         $KeyResult.RecoveryKey = $null
+        Restore-SecretActionControls
+        Set-AppStatus -Message "Ready — signed in as $($settings.ExpectedAccount)"
+        Show-Toast -Message 'The selection changed, so no recovery key was exposed.' -Kind Info
+        Set-RecoveryActionFocus -Kind BitLocker -Action $Action
         return
     }
 
@@ -2087,13 +2821,17 @@ function Complete-BitLockerAction {
         Set-BitLockerStatus -Message "Hides automatically in $($settings.RevealSeconds) seconds" -DotColor '#2563EB' -TextColor '#1D4ED8'
     }
 
-    $CopyRecoveryKeyButton.IsEnabled = $true
-    $RevealRecoveryKeyButton.IsEnabled = $true
+    Restore-SecretActionControls
     Set-AppStatus -Message "Ready — signed in as $($settings.ExpectedAccount)"
+    Set-RecoveryActionFocus -Kind BitLocker -Action $Action
 }
 
 function Invoke-BitLockerAction {
-    param([Parameter(Mandatory)][ValidateSet('Copy', 'Reveal')][string]$Action)
+    param(
+        [Parameter(Mandatory)][ValidateSet('Copy', 'Reveal')][string]$Action,
+        [switch]$VerificationGranted,
+        [AllowNull()][Nullable[int]]$VerificationGeneration = $null
+    )
 
     $selected = Get-SelectedDevice
     $selectedKey = $BitLockerKeySelector.SelectedItem
@@ -2120,6 +2858,19 @@ function Invoke-BitLockerAction {
         return
     }
 
+    if (-not $VerificationGranted) {
+        Request-SecretAction -Kind BitLocker -Action $Action
+        return
+    }
+
+    if (-not (Test-SecretVerificationGeneration -Generation $VerificationGeneration)) {
+        Restore-SecretActionControls
+        Set-AppStatus -Message "Ready — signed in as $($settings.ExpectedAccount)"
+        Show-Toast -Message 'Verification expired or the Windows session changed. No recovery key was accessed.' -Kind Info
+        Set-RecoveryActionFocus -Kind BitLocker -Action $Action
+        return
+    }
+
     if ($null -ne $script:CurrentBitLockerKey -and
         [string]::Equals($script:CurrentBitLockerDeviceId, [string]$selected.EntraDeviceId, [StringComparison]::OrdinalIgnoreCase) -and
         [string]::Equals($script:CurrentBitLockerKeyId, [string]$selectedKey.Id, [StringComparison]::OrdinalIgnoreCase) -and
@@ -2133,9 +2884,8 @@ function Invoke-BitLockerAction {
     }
 
     $script:PendingBitLockerAction = $Action
-    $CopyRecoveryKeyButton.IsEnabled = $false
-    $RevealRecoveryKeyButton.IsEnabled = $false
-    $CopyRecoveryKeyButtonText.Text = 'Retrieving...'
+    $script:PendingBitLockerVerificationGeneration = [int]$VerificationGeneration
+    Set-SecretActionBusy -Kind BitLocker
     Set-AppStatus -Message "Retrieving a BitLocker recovery key for $($selected.DeviceName)..." -Busy
     $null = Start-GraphOperation -Name 'BitLockerKey' -ScriptText $bitLockerKeyOperationScript -Arguments @(
         [string]$selected.EntraDeviceId,
@@ -2178,7 +2928,50 @@ function Complete-GraphOperation {
     $Operation.Output.Dispose()
     $script:CurrentOperation = $null
 
+    if ($operationName -eq 'MicrosoftVerification') {
+        try { $null = [M365Workbench.Security.SecureClipboard]::ClearIfUnchanged() } catch { }
+        $script:LastDeviceCode = $null
+        $script:SignInPageOpenedForCode = $null
+        $AuthOverlay.Visibility = 'Collapsed'
+        $CancelVerificationButton.Visibility = 'Collapsed'
+        $CancelVerificationButton.IsEnabled = $true
+        switch ([string]$result.Kind) {
+            'MicrosoftVerificationResult' {
+                if ($null -eq $script:PendingSecretRequest) {
+                    Fail-SecretVerification -Message 'The Windows session changed, so verification was canceled.' -Canceled
+                }
+                else {
+                    $expectedGeneration = [int]$script:PendingSecretRequest.VerificationGeneration
+                    if (Set-SecretVerificationGranted -ExpectedGeneration $expectedGeneration) {
+                        Resume-PendingSecretRequest
+                    }
+                    else {
+                        Fail-SecretVerification -Message 'The Windows session changed, so verification was canceled.' -Canceled
+                    }
+                }
+            }
+            'VerificationCanceled' {
+                Fail-SecretVerification -Message 'Verification canceled. No recovery data was accessed.' -Canceled
+            }
+            default {
+                $verificationErrorCode = if ($null -ne $result.PSObject.Properties['ErrorCode']) { [string]$result.ErrorCode } else { 'MicrosoftVerificationFailed' }
+                $verificationMessage = switch ($verificationErrorCode) {
+                    'WrongAccount' { "Microsoft verification must use $($settings.ExpectedAccount). No recovery data was accessed." }
+                    'WrongTenant' { 'Microsoft verification used a different tenant. No recovery data was accessed.' }
+                    'MissingScopes' { 'Microsoft verification did not include the configured recovery permissions. No recovery data was accessed.' }
+                    'VerificationTimedOut' { 'Microsoft verification timed out. No recovery data was accessed.' }
+                    'InteractiveVerificationNotObserved' { 'Microsoft did not present a fresh verification code. No recovery data was accessed; try again.' }
+                    default { 'Microsoft verification could not be completed. No recovery data was accessed.' }
+                }
+                Fail-SecretVerification -Message $verificationMessage
+            }
+        }
+        return
+    }
+
     if ([string]$result.Kind -eq 'Error') {
+        $failedRecoveryKind = $null
+        $failedRecoveryAction = $null
         $statusCode = if ($null -eq $result.StatusCode) { $null } else { [Nullable[int]]([int]$result.StatusCode) }
         $friendly = Get-FriendlyLapsErrorMessage -ErrorCode ([string]$result.ErrorCode) -Message ([string]$result.Message) -StatusCode $statusCode
         $stageProperty = $result.PSObject.Properties['Stage']
@@ -2186,20 +2979,33 @@ function Complete-GraphOperation {
             $friendly = "$friendly Failed while loading $([string]$stageProperty.Value)."
         }
         if ($operationName -eq 'Authenticate') {
+            try { $null = [M365Workbench.Security.SecureClipboard]::ClearIfUnchanged() } catch { }
+            $script:LastDeviceCode = $null
+            $script:SignInPageOpenedForCode = $null
             $AuthOverlay.Visibility = 'Collapsed'
             Set-AuthenticationDisplay -SignedIn $false -Text 'Sign-in required'
+            $script:AuthenticationVerificationGeneration = $null
         }
         if ($operationName -eq 'Credential') {
-            $CopyPasswordButton.IsEnabled = $true
-            $RevealPasswordButton.IsEnabled = $true
-            $CopyPasswordButtonText.Text = 'Copy password'
+            $failedRecoveryKind = 'LAPS'
+            $failedRecoveryAction = $script:PendingCredentialAction
             $script:PendingCredentialAction = $null
+            $script:PendingCredentialVerificationGeneration = $null
         }
         if ($operationName -eq 'BitLockerKey') {
-            $CopyRecoveryKeyButton.IsEnabled = $null -ne $BitLockerKeySelector.SelectedItem
-            $RevealRecoveryKeyButton.IsEnabled = $null -ne $BitLockerKeySelector.SelectedItem
-            $CopyRecoveryKeyButtonText.Text = 'Copy recovery key'
+            $failedRecoveryKind = 'BitLocker'
+            $failedRecoveryAction = $script:PendingBitLockerAction
             $script:PendingBitLockerAction = $null
+            $script:PendingBitLockerVerificationGeneration = $null
+        }
+        if ($operationName -in @('Credential', 'BitLockerKey')) {
+            Restore-SecretActionControls
+            if ($failedRecoveryAction -in @('Copy', 'Reveal')) {
+                Set-RecoveryActionFocus -Kind $failedRecoveryKind -Action ([string]$failedRecoveryAction)
+            }
+            else {
+                $null = $DeviceGrid.Focus()
+            }
         }
         if ($operationName -eq 'Inventory') {
             $LoadingOverlay.Visibility = 'Collapsed'
@@ -2219,12 +3025,18 @@ function Complete-GraphOperation {
     switch ($operationName) {
         'Authenticate' {
             $null = [M365Workbench.Security.SecureClipboard]::ClearIfUnchanged()
+            $script:LastDeviceCode = $null
+            $script:SignInPageOpenedForCode = $null
             $script:ClipboardClearAt = [DateTimeOffset]::MinValue
             $script:ClipboardDeviceId = $null
             $script:ClipboardKind = $null
             $script:ClipboardRecoveryKeyId = $null
             $AuthOverlay.Visibility = 'Collapsed'
             Set-AuthenticationDisplay -SignedIn $true -Text ([string]$result.Account)
+            if ($script:AuthenticationDeviceCodeObserved -and $null -ne $script:AuthenticationVerificationGeneration) {
+                $null = Set-RecentInteractiveAuthentication -ExpectedGeneration ([int]$script:AuthenticationVerificationGeneration)
+            }
+            $script:AuthenticationVerificationGeneration = $null
             Set-AppStatus -Message 'Signed in. Loading computers...' -Busy
             Start-InventoryLoad
         }
@@ -2235,13 +3047,39 @@ function Complete-GraphOperation {
         }
         'Credential' {
             $action = $script:PendingCredentialAction
+            $verificationGeneration = $script:PendingCredentialVerificationGeneration
             $script:PendingCredentialAction = $null
-            Complete-CredentialAction -Action $action -Credential $result
+            $script:PendingCredentialVerificationGeneration = $null
+            if (Test-SecretVerificationGeneration -Generation $verificationGeneration) {
+                Complete-CredentialAction -Action $action -Credential $result
+            }
+            else {
+                if ($null -ne $result.PSObject.Properties['Password']) {
+                    $result.Password = $null
+                }
+                Restore-SecretActionControls
+                Set-AppStatus -Message "Ready — signed in as $($settings.ExpectedAccount)"
+                Show-Toast -Message 'Verification expired or the Windows session changed. No password was exposed.' -Kind Info
+                Set-RecoveryActionFocus -Kind LAPS -Action $action
+            }
         }
         'BitLockerKey' {
             $action = $script:PendingBitLockerAction
+            $verificationGeneration = $script:PendingBitLockerVerificationGeneration
             $script:PendingBitLockerAction = $null
-            Complete-BitLockerAction -Action $action -KeyResult $result
+            $script:PendingBitLockerVerificationGeneration = $null
+            if (Test-SecretVerificationGeneration -Generation $verificationGeneration) {
+                Complete-BitLockerAction -Action $action -KeyResult $result
+            }
+            else {
+                if ($null -ne $result.PSObject.Properties['RecoveryKey']) {
+                    $result.RecoveryKey = $null
+                }
+                Restore-SecretActionControls
+                Set-AppStatus -Message "Ready — signed in as $($settings.ExpectedAccount)"
+                Show-Toast -Message 'Verification expired or the Windows session changed. No recovery key was exposed.' -Kind Info
+                Set-RecoveryActionFocus -Kind BitLocker -Action $action
+            }
         }
     }
 }
@@ -2255,9 +3093,12 @@ function Process-OperationOutput {
     while ($operation.OutputIndex -lt $operation.Output.Count) {
         $item = $operation.Output[$operation.OutputIndex]
         $operation.OutputIndex++
-        if ($operation.Name -eq 'Authenticate') {
+        if ($operation.Name -in @('Authenticate', 'MicrosoftVerification')) {
             $deviceCode = Get-DeviceCodeFromMessage -Message $item
             if ($null -ne $deviceCode) {
+                if ($operation.Name -eq 'Authenticate') {
+                    $script:AuthenticationDeviceCodeObserved = $true
+                }
                 Set-DeviceCode -Code $deviceCode.UserCode
             }
         }
@@ -2415,9 +3256,22 @@ $CopyCodeButton.Add_Click({
     }
 })
 $OpenSignInButton.Add_Click({ Open-DeviceSignInPage })
+$CancelVerificationButton.Add_Click({ Stop-SecretVerification })
 $window.Add_PreviewKeyDown({
     param($sender, $eventArgs)
     $modifiers = $eventArgs.KeyboardDevice.Modifiers
+    if ($AuthOverlay.Visibility -eq 'Visible') {
+        if ($eventArgs.Key -eq [System.Windows.Input.Key]::Escape -and $CancelVerificationButton.Visibility -eq 'Visible') {
+            Stop-SecretVerification
+            $eventArgs.Handled = $true
+        }
+        elseif ($eventArgs.Key -eq [System.Windows.Input.Key]::F5 -or
+            ($modifiers -eq [System.Windows.Input.ModifierKeys]::Control -and $eventArgs.Key -eq [System.Windows.Input.Key]::F) -or
+            ($modifiers -eq ([System.Windows.Input.ModifierKeys]::Control -bor [System.Windows.Input.ModifierKeys]::Shift) -and $eventArgs.Key -eq [System.Windows.Input.Key]::C)) {
+            $eventArgs.Handled = $true
+        }
+        return
+    }
     if ($modifiers -eq [System.Windows.Input.ModifierKeys]::Control -and $eventArgs.Key -eq [System.Windows.Input.Key]::F) {
         $SearchBox.Focus()
         $SearchBox.SelectAll()
@@ -2457,6 +3311,9 @@ $pollTimer = [System.Windows.Threading.DispatcherTimer]::new()
 $pollTimer.Interval = [TimeSpan]::FromMilliseconds(125)
 $pollTimer.Add_Tick({
     Process-OperationOutput
+    if ($null -ne $script:LocalVerificationTask -and $script:LocalVerificationTask.IsCompleted) {
+        Complete-LocalSecretVerification
+    }
     $now = [DateTimeOffset]::Now
 
     if ($script:ToastExpiresAt -ne [DateTimeOffset]::MinValue -and $now -ge $script:ToastExpiresAt) {
@@ -2517,6 +3374,26 @@ $pollTimer.Add_Tick({
     }
 })
 
+$sessionSwitchHandler = [Microsoft.Win32.SessionSwitchEventHandler]{
+    param($sender, $eventArgs)
+
+    if ([string]$eventArgs.Reason -in @('SessionLock', 'SessionLogoff', 'RemoteDisconnect', 'ConsoleDisconnect')) {
+        try {
+            $window.Dispatcher.Invoke([Action]{
+                Clear-SecretVerificationState
+                Clear-SecretDisplay
+                try { $null = [M365Workbench.Security.SecureClipboard]::ClearIfUnchanged() } catch { }
+                $script:ClipboardClearAt = [DateTimeOffset]::MinValue
+                $script:ClipboardDeviceId = $null
+                $script:ClipboardKind = $null
+                $script:ClipboardRecoveryKeyId = $null
+            }) | Out-Null
+        }
+        catch { }
+    }
+}
+[Microsoft.Win32.SystemEvents]::add_SessionSwitch($sessionSwitchHandler)
+
 $window.Add_Loaded({
     $onlyRecoveryReady = if ($settings.ContainsKey('OnlyRecoveryReadyByDefault')) {
         [bool]$settings.OnlyRecoveryReadyByDefault
@@ -2546,7 +3423,20 @@ $window.Add_Loaded({
     $pollTimer.Start()
 
     if (-not [string]::IsNullOrWhiteSpace($RenderPreviewPath)) {
-        if ($DemoMode) {
+        if ($RenderPreviewState -eq 'MicrosoftVerification') {
+            $AuthOverlayTitle.Text = 'Verify with Microsoft'
+            $AuthOverlaySubtitle.Text = 'Required before accessing recovery data'
+            $AuthOverlayInstruction.Text = 'Windows verification is not available. Complete Microsoft sign-in as the configured administrator account.'
+            $AuthOverlayFooter.Text = "Your organization's sign-in policy determines which verification methods are required."
+            $DeviceCodeText.Text = 'Z9Y8X7W6V'
+            $AuthOverlayStatus.Text = "Code copied. Sign in as $($settings.ExpectedAccount)."
+            $CopyCodeButton.IsEnabled = $true
+            $OpenSignInButton.IsEnabled = $true
+            $CancelVerificationButton.Visibility = 'Visible'
+            $AuthOverlay.Visibility = 'Visible'
+            Set-AppStatus -Message 'Waiting for Microsoft verification...' -Busy
+        }
+        elseif ($DemoMode) {
             Set-RecoveryTab -Tab 'BitLocker'
             if ($null -ne $DeviceGrid.SelectedItem -and $DeviceGrid.Columns.Count -gt 3) {
                 $DeviceGrid.CurrentCell = [System.Windows.Controls.DataGridCellInfo]::new($DeviceGrid.SelectedItem, $DeviceGrid.Columns[3])
@@ -2562,6 +3452,7 @@ $window.Add_Loaded({
 
 $window.Add_Closed({
     $pollTimer.Stop()
+    Clear-SecretVerificationState
     Clear-SecretDisplay
     try { $null = [M365Workbench.Security.SecureClipboard]::ClearIfUnchanged() } catch { }
     if ($null -ne $script:GraphPowerShell) {
@@ -2574,6 +3465,7 @@ $window.Add_Closed({
         $script:GraphRunspace.Close()
         $script:GraphRunspace.Dispose()
     }
+    try { [Microsoft.Win32.SystemEvents]::remove_SessionSwitch($sessionSwitchHandler) } catch { }
     # Deliberately do not call Disconnect-MgGraph; retain the secure CurrentUser cache.
 })
 

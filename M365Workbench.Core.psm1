@@ -698,6 +698,49 @@ function Get-DeviceCodeFromMessage {
     }
 }
 
+function Get-SecretVerificationDecision {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet('Preferred', 'Required', 'Disabled')]
+        [string]$Mode,
+
+        [AllowNull()]
+        [ValidateSet('Verified', 'DeviceNotPresent', 'NotConfiguredForUser', 'DisabledByPolicy', 'DeviceBusy', 'RetriesExhausted', 'Canceled', 'TimedOut', 'NotSupported', 'Unavailable', 'Error')]
+        [string]$LocalResult,
+
+        [DateTimeOffset]$VerifiedUntil = [DateTimeOffset]::MinValue,
+
+        [DateTimeOffset]$Now = [DateTimeOffset]::Now
+    )
+
+    if ($Mode -eq 'Disabled') {
+        return 'Bypass'
+    }
+
+    if ($VerifiedUntil -gt $Now) {
+        return 'Grant'
+    }
+
+    if ([string]::IsNullOrWhiteSpace($LocalResult)) {
+        return 'Local'
+    }
+
+    switch ($LocalResult) {
+        'Verified' { return 'Grant' }
+        { $_ -in @('DeviceNotPresent', 'NotConfiguredForUser', 'DisabledByPolicy', 'NotSupported', 'Unavailable') } {
+            if ($Mode -eq 'Preferred') {
+                return 'Microsoft'
+            }
+            return 'Blocked'
+        }
+        'DeviceBusy' { return 'Retry' }
+        'Canceled' { return 'Canceled' }
+        'TimedOut' { return 'TimedOut' }
+        default { return 'Denied' }
+    }
+}
+
 function Get-FriendlyLapsErrorMessage {
     [CmdletBinding()]
     param(
@@ -742,6 +785,7 @@ Export-ModuleMember -Function @(
     'Get-DeviceAdminPortalUri'
     'Get-DeviceCodeFromMessage'
     'Get-FriendlyLapsErrorMessage'
+    'Get-SecretVerificationDecision'
     'Merge-IntuneLapsDeviceData'
     'Select-CurrentLapsCredential'
     'Test-BitLockerRecoveryKey'

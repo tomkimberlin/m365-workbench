@@ -25,7 +25,7 @@ M365 Workbench is a focused desktop app for frequent Microsoft 365 administratio
 - BitLocker recovery-key metadata, volume selection, per-key copy, and timed reveal
 - OS, model, serial, join type, ownership, encryption, compliance, Intune sync, and Entra activity context
 - Validated deep links to each device's exact Intune and Entra admin-center records
-- Tenant/account/scope enforcement and protected clipboard handling
+- Tenant/account/scope enforcement, protected clipboard handling, and user verification before recovery access
 
 ## Next foundations
 

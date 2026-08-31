@@ -7,6 +7,7 @@ $ErrorActionPreference = 'Stop'
 $appRoot = Split-Path -Parent $PSScriptRoot
 $modulePath = Join-Path $appRoot 'M365Workbench.Core.psm1'
 $clipboardPath = Join-Path $appRoot 'SecureClipboard.cs'
+$windowsHelloPath = Join-Path $appRoot 'WindowsHelloVerifier.cs'
 $mainScriptPath = Join-Path $appRoot 'M365Workbench.ps1'
 $iconPath = Join-Path $appRoot 'assets\M365Workbench.ico'
 $shortcutInstallerPath = Join-Path $appRoot 'Install-DesktopShortcut.ps1'
@@ -19,11 +20,15 @@ $securityPolicyPath = Join-Path $appRoot 'SECURITY.md'
 $launcherTestPath = Join-Path $appRoot 'artifacts\M365Workbench.Launcher.Test.exe'
 $shortcutIdentityTestPath = Join-Path $appRoot "artifacts\M365Workbench.Identity.$PID.Test.lnk"
 $visualPreviewTestPath = Join-Path $appRoot "artifacts\M365Workbench.Visual.$PID.Test.png"
+$authVisualPreviewTestPath = Join-Path $appRoot "artifacts\M365Workbench.AuthVisual.$PID.Test.png"
 $expectedAppUserModelId = 'M365Workbench.Desktop'
 
 Import-Module $modulePath -Force
 if ($null -eq ('M365Workbench.Security.SecureClipboard' -as [type])) {
     Add-Type -Path $clipboardPath
+}
+if ($null -eq ('M365Workbench.Security.WindowsHelloVerifier' -as [type])) {
+    Add-Type -Path $windowsHelloPath
 }
 if ($null -eq ('M365Workbench.WindowsShellIdentity' -as [type])) {
     Add-Type -Path $shellIdentityPath
@@ -94,6 +99,17 @@ $message = 'To sign in, use a web browser to open the page https://microsoft.com
 $deviceCode = Get-DeviceCodeFromMessage -Message $message
 Assert-Equal -Actual $deviceCode.UserCode -Expected 'A1B2C3D4E' -Name 'Microsoft Graph device-code prompt is parsed'
 Assert-True -Condition ($null -eq (Get-DeviceCodeFromMessage -Message 'ordinary output')) -Name 'Unrelated output is ignored by device-code parser'
+
+$verificationNow = [DateTimeOffset]::Parse('2026-08-31T12:00:00Z')
+Assert-Equal -Actual (Get-SecretVerificationDecision -Mode Preferred -VerifiedUntil $verificationNow.AddMinutes(1) -Now $verificationNow) -Expected 'Grant' -Name 'A current fixed verification window permits secret access'
+Assert-Equal -Actual (Get-SecretVerificationDecision -Mode Preferred -VerifiedUntil $verificationNow.AddSeconds(-1) -Now $verificationNow) -Expected 'Local' -Name 'An expired verification window requires local verification'
+Assert-Equal -Actual (Get-SecretVerificationDecision -Mode Preferred -LocalResult NotConfiguredForUser -Now $verificationNow) -Expected 'Microsoft' -Name 'Preferred mode falls back to Microsoft when Windows verification is not configured'
+Assert-Equal -Actual (Get-SecretVerificationDecision -Mode Preferred -LocalResult Verified -Now $verificationNow) -Expected 'Grant' -Name 'Only a successful local result grants a new verification window'
+Assert-Equal -Actual (Get-SecretVerificationDecision -Mode Required -LocalResult NotConfiguredForUser -Now $verificationNow) -Expected 'Blocked' -Name 'Required mode fails closed when Windows verification is unavailable'
+Assert-Equal -Actual (Get-SecretVerificationDecision -Mode Preferred -LocalResult Canceled -Now $verificationNow) -Expected 'Canceled' -Name 'Canceling Windows verification does not trigger another prompt'
+Assert-Equal -Actual (Get-SecretVerificationDecision -Mode Preferred -LocalResult TimedOut -Now $verificationNow) -Expected 'TimedOut' -Name 'A Windows verification timeout is distinguished from user cancellation'
+Assert-Equal -Actual (Get-SecretVerificationDecision -Mode Preferred -LocalResult DeviceBusy -Now $verificationNow) -Expected 'Retry' -Name 'A busy Windows verification device asks the user to retry'
+Assert-Equal -Actual (Get-SecretVerificationDecision -Mode Disabled -LocalResult Error -Now $verificationNow) -Expected 'Bypass' -Name 'Verification can only be bypassed by the explicit Disabled mode'
 
 $requiredScopes = @('Device.Read.All', 'DeviceManagementManagedDevices.Read.All', 'DeviceLocalCredential.Read.All')
 $tenantId = [Guid]'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
@@ -184,6 +200,22 @@ $friendlyDecode = Get-FriendlyLapsErrorMessage -ErrorCode 'RuntimeException' -Me
 Assert-True -Condition ($friendlyDecode -match 'updated utility') -Name 'Password decoding errors are distinguished from Graph failures'
 
 Assert-True -Condition ([M365Workbench.Security.SecureClipboard]::ProtectionFormatsAvailable()) -Name 'Windows secure clipboard history/cloud exclusion formats are available'
+Assert-Equal -Actual ([M365Workbench.Security.WindowsHelloVerifier]::DefaultTimeoutMilliseconds) -Expected 120000 -Name 'Windows user verification helper compiles with a bounded prompt timeout'
+$windowsHelloSource = [IO.File]::ReadAllText($windowsHelloPath)
+Assert-True -Condition ($windowsHelloSource.Contains('catch (Exception exception)') -and $windowsHelloSource.Contains('WindowsVerificationState.Error')) -Name 'Unexpected managed interop failures return a structured fail-closed result'
+$interopType = [M365Workbench.Security.WindowsHelloVerifier].Assembly.GetType('M365Workbench.Security.IUserConsentVerifierInterop', $true)
+$interopGuid = $interopType.GUID.ToString().ToUpperInvariant()
+$interfaceAttribute = $interopType.GetCustomAttributes([Runtime.InteropServices.InterfaceTypeAttribute], $false) | Select-Object -First 1
+Assert-Equal -Actual $interopGuid -Expected '39E050C3-4E74-441A-8DC0-B81104DF949C' -Name 'Windows verification uses the documented desktop HWND interop interface'
+Assert-Equal -Actual ([string]$interfaceAttribute.Value) -Expected 'InterfaceIsIUnknown' -Name 'WinRT interop uses the modern .NET-safe IUnknown projection'
+$invalidWindowRejected = $false
+try {
+    $null = [M365Workbench.Security.WindowsHelloVerifier]::VerifyAsync([IntPtr]::Zero, 'Offline test')
+}
+catch [ArgumentException] {
+    $invalidWindowRejected = $true
+}
+Assert-True -Condition $invalidWindowRejected -Name 'Windows verification rejects an invalid owner window before native activation'
 Assert-True -Condition (Test-Path -LiteralPath $iconPath -PathType Leaf) -Name 'M365 Workbench icon asset exists'
 $iconFrameCount = 0
 if (Test-Path -LiteralPath $iconPath -PathType Leaf) {
@@ -196,7 +228,7 @@ Assert-Equal -Actual $iconFrameCount -Expected 9 -Name 'Windows icon contains th
 
 $tokens = $null
 $parseErrors = $null
-[System.Management.Automation.Language.Parser]::ParseFile($mainScriptPath, [ref]$tokens, [ref]$parseErrors) | Out-Null
+$mainAst = [System.Management.Automation.Language.Parser]::ParseFile($mainScriptPath, [ref]$tokens, [ref]$parseErrors)
 Assert-Equal -Actual $parseErrors.Count -Expected 0 -Name 'Main WPF application parses without PowerShell syntax errors'
 $tokens = $null
 $parseErrors = $null
@@ -265,6 +297,7 @@ $actualShortcutAppId = [M365Workbench.WindowsShellIdentity]::GetShortcutAppId($s
 Assert-Equal -Actual $actualShortcutAppId -Expected $expectedAppUserModelId -Name 'Windows shortcut stores the dedicated M365 Workbench AppUserModelID'
 
 $mainSource = [IO.File]::ReadAllText($mainScriptPath)
+$settingsExampleSource = [IO.File]::ReadAllText((Join-Path $appRoot 'M365Workbench.settings.example.psd1'))
 $fixtureDeviceNames = @([regex]::Matches($mainSource, "(?:deviceName|displayName)='(?<name>[^']+)'" ) | ForEach-Object { $_.Groups['name'].Value })
 $fixtureSerialNumbers = @([regex]::Matches($mainSource, "serialNumber='(?<serial>[^']+)'" ) | ForEach-Object { $_.Groups['serial'].Value })
 Assert-True -Condition ($fixtureDeviceNames.Count -gt 0 -and @($fixtureDeviceNames | Where-Object { -not $_.StartsWith('DEMO-DEVICE-') }).Count -eq 0) -Name 'Every embedded device fixture is unmistakably synthetic'
@@ -272,6 +305,7 @@ Assert-True -Condition ($fixtureSerialNumbers.Count -gt 0 -and @($fixtureSerialN
 Assert-True -Condition ((Test-Path -LiteralPath $licensePath -PathType Leaf) -and [IO.File]::ReadAllText($licensePath).StartsWith('MIT License')) -Name 'Repository includes the MIT License'
 Assert-True -Condition ((Test-Path -LiteralPath $readmePath -PathType Leaf) -and (Test-Path -LiteralPath $securityPolicyPath -PathType Leaf)) -Name 'Public README and security policy are present'
 Assert-True -Condition ($mainSource.Contains('M365 Workbench') -and -not $mainSource.Contains('Entra + Intune Console')) -Name 'Application identity uses M365 Workbench throughout the UI'
+Assert-True -Condition ($mainSource.IndexOf('if ($DemoMode) {', [StringComparison]::Ordinal) -lt $mainSource.IndexOf("elseif (Test-Path -LiteralPath `$settingsPath -PathType Leaf)", [StringComparison]::Ordinal)) -Name 'Demo mode always uses synthetic settings even when a local tenant file exists'
 Assert-True -Condition ($mainSource.Contains("`$appUserModelId = '$expectedAppUserModelId'") -and $mainSource.Contains('[M365Workbench.WindowsShellIdentity]::SetCurrentProcessAppId($appUserModelId)') -and $mainSource.Contains('[M365Workbench.WindowsShellIdentity]::SetWindowAppId($windowHandle, $appUserModelId)')) -Name 'Running WPF process and window use the dedicated M365 Workbench AppUserModelID'
 Assert-True -Condition ($mainSource.Contains('x:Name="EntraOnlyFilterContainer"') -and $mainSource.Contains('x:Name="EntraOnlyCheckBox"') -and $mainSource.Contains('Style="{StaticResource FilterCheckBox}"') -and $mainSource.Contains('ManagementStateDescription')) -Name 'Entra-only and recovery-ready options use the same checkbox filter pattern'
 Assert-True -Condition (-not $mainSource.Contains('ManagementFilterButton') -and -not $mainSource.Contains('$OnlyReadyCheckBox.IsChecked = $false')) -Name 'Checkbox filters combine independently without hidden mutual exclusion'
@@ -285,6 +319,107 @@ Assert-True -Condition ($mainSource.Contains('x:Key="RecoveryKeyPicker"') -and $
 Assert-True -Condition ($mainSource.Contains('Text="{Binding VolumeDisplay}"') -and $mainSource.Contains('<Run Text="Backed up "/><Run Text="{Binding CreatedDisplay}"/>')) -Name 'Recovery-key choices align volume and backup date as a readable two-line record'
 Assert-True -Condition ($mainSource.Contains('x:Name="DetailDeviceName"') -and -not $mainSource.Contains('Text="&#xE770;"')) -Name 'Device detail header does not imply an unavailable chassis type'
 Assert-True -Condition ($mainSource.Contains('x:Name="OpenIntuneButton"') -and $mainSource.Contains('x:Name="OpenEntraButton"') -and $mainSource.Contains('Open-SelectedDevicePortal -Portal Intune') -and $mainSource.Contains('Open-SelectedDevicePortal -Portal Entra')) -Name 'Device detail panel exposes both validated admin-center deep links'
+Assert-True -Condition ($mainSource.Contains("`$windowsHelloPath = Join-Path `$appRoot 'WindowsHelloVerifier.cs'") -and $mainSource.Contains('[M365Workbench.Security.WindowsHelloVerifier]::VerifyAsync(')) -Name 'Recovery actions use the dependency-free Windows user-verification helper'
+$credentialActionMatch = [regex]::Match($mainSource, '(?s)function Invoke-CredentialAction \{(?<body>.*?)\r?\n\}\r?\n\r?\nfunction Complete-BitLockerAction')
+$bitLockerActionMatch = [regex]::Match($mainSource, '(?s)function Invoke-BitLockerAction \{(?<body>.*?)\r?\n\}\r?\n\r?\nfunction Get-OperationResultObject')
+$credentialGateIndex = if ($credentialActionMatch.Success) { $credentialActionMatch.Groups['body'].Value.IndexOf('Request-SecretAction -Kind LAPS') } else { -1 }
+$credentialCacheIndex = if ($credentialActionMatch.Success) { $credentialActionMatch.Groups['body'].Value.IndexOf('$script:CurrentCredential') } else { -1 }
+$bitLockerGateIndex = if ($bitLockerActionMatch.Success) { $bitLockerActionMatch.Groups['body'].Value.IndexOf('Request-SecretAction -Kind BitLocker') } else { -1 }
+$bitLockerCacheIndex = if ($bitLockerActionMatch.Success) { $bitLockerActionMatch.Groups['body'].Value.IndexOf('$script:CurrentBitLockerKey') } else { -1 }
+Assert-True -Condition ($credentialGateIndex -ge 0 -and $credentialGateIndex -lt $credentialCacheIndex) -Name 'LAPS verification gate runs before cached password reuse or Graph retrieval'
+Assert-True -Condition ($bitLockerGateIndex -ge 0 -and $bitLockerGateIndex -lt $bitLockerCacheIndex) -Name 'BitLocker verification gate runs before cached key reuse or Graph retrieval'
+$microsoftVerificationMatch = [regex]::Match($mainSource, "(?s)\`$microsoftVerificationOperationScript = @'\r?\n(?<body>.*?)\r?\n'@")
+$microsoftVerificationBody = if ($microsoftVerificationMatch.Success) { $microsoftVerificationMatch.Groups['body'].Value } else { '' }
+$microsoftVerificationChildMatch = [regex]::Match($mainSource, "(?s)\`$microsoftVerificationChildScript = @'\r?\n(?<body>.*?)\r?\n'@")
+$microsoftVerificationChildBody = if ($microsoftVerificationChildMatch.Success) { $microsoftVerificationChildMatch.Groups['body'].Value } else { '' }
+Assert-True -Condition ($microsoftVerificationBody.Contains('CreateNoWindow = $true') -and $microsoftVerificationBody.Contains('$deviceCodeObserved') -and $microsoftVerificationBody.Contains("Kind = 'MicrosoftVerificationResult'")) -Name 'Microsoft fallback is hidden, isolated, and accepted only after a fresh device code is observed'
+Assert-True -Condition ($microsoftVerificationChildBody.Contains('-ContextScope Process') -and $microsoftVerificationChildBody.Contains('Test-LapsGraphContext') -and -not $microsoftVerificationChildBody.Contains('Disconnect-MgGraph')) -Name 'Microsoft fallback cannot replace or clear the reusable CurrentUser Graph session'
+
+$verificationHarness = [scriptblock]::Create($microsoftVerificationBody)
+$fakeInteractiveVerifier = @'
+$configJson = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:M365WB_VERIFY_CONFIG))
+$config = $configJson | ConvertFrom-Json
+[Console]::Out.WriteLine('To sign in, use a web browser to open the page https://microsoft.com/devicelogin and enter the code Z9Y8X7W6V to authenticate.')
+$payloadJson = [pscustomobject]@{ Status = 'Verified'; ErrorCode = '' } | ConvertTo-Json -Compress
+$payload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($payloadJson))
+[Console]::Out.WriteLine("M365WB_VERIFY_RESULT::$($config.Nonce)::$payload")
+exit 0
+'@
+$fakeSilentVerifier = @'
+$configJson = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:M365WB_VERIFY_CONFIG))
+$config = $configJson | ConvertFrom-Json
+$payloadJson = [pscustomobject]@{ Status = 'Verified'; ErrorCode = '' } | ConvertTo-Json -Compress
+$payload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($payloadJson))
+[Console]::Out.WriteLine("M365WB_VERIFY_RESULT::$($config.Nonce)::$payload")
+exit 0
+'@
+$fakeBlockingVerifier = 'Start-Sleep -Seconds 30'
+$verificationPowerShell = Join-Path $PSHOME 'pwsh.exe'
+$verificationHarnessArguments = @(
+    'contoso.onmicrosoft.com',
+    'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+    'laps-admin@contoso.onmicrosoft.com',
+    [string[]]$requiredScopes,
+    $modulePath,
+    '2.38.0',
+    $verificationPowerShell
+)
+
+$interactiveCancelEvent = [Threading.EventWaitHandle]::new($false, [Threading.EventResetMode]::ManualReset)
+try {
+    $interactiveNonce = [Guid]::NewGuid().ToString('N')
+    $interactiveOutput = @(& $verificationHarness @verificationHarnessArguments $interactiveNonce $fakeInteractiveVerifier $interactiveCancelEvent 10)
+    $interactiveResult = $interactiveOutput | Where-Object { $null -ne $_.PSObject.Properties['Kind'] } | Select-Object -Last 1
+    Assert-Equal -Actual ([string]$interactiveResult.Kind) -Expected 'MicrosoftVerificationResult' -Name 'Isolated Microsoft verifier accepts a nonce-bound success only after observing a fresh code'
+    Assert-True -Condition ($null -ne ($interactiveOutput | Where-Object { (Get-DeviceCodeFromMessage -Message $_) } | Select-Object -First 1)) -Name 'Isolated verifier streams the fresh device code to the existing sign-in UI'
+}
+finally {
+    $interactiveCancelEvent.Dispose()
+}
+
+$silentCancelEvent = [Threading.EventWaitHandle]::new($false, [Threading.EventResetMode]::ManualReset)
+try {
+    $silentNonce = [Guid]::NewGuid().ToString('N')
+    $silentOutput = @(& $verificationHarness @verificationHarnessArguments $silentNonce $fakeSilentVerifier $silentCancelEvent 10)
+    $silentResult = $silentOutput | Where-Object { $null -ne $_.PSObject.Properties['Kind'] } | Select-Object -Last 1
+    Assert-Equal -Actual ([string]$silentResult.ErrorCode) -Expected 'InteractiveVerificationNotObserved' -Name 'A silent child-process token result cannot satisfy user verification'
+}
+finally {
+    $silentCancelEvent.Dispose()
+}
+
+$cancelEvent = [Threading.EventWaitHandle]::new($true, [Threading.EventResetMode]::ManualReset)
+try {
+    $cancelNonce = [Guid]::NewGuid().ToString('N')
+    $cancelOutput = @(& $verificationHarness @verificationHarnessArguments $cancelNonce $fakeBlockingVerifier $cancelEvent 10)
+    $cancelResult = $cancelOutput | Where-Object { $null -ne $_.PSObject.Properties['Kind'] } | Select-Object -Last 1
+    Assert-Equal -Actual ([string]$cancelResult.Kind) -Expected 'VerificationCanceled' -Name 'Canceling Microsoft verification terminates the isolated child and fails closed'
+}
+finally {
+    $cancelEvent.Dispose()
+}
+
+Assert-True -Condition ($mainSource.Contains('$script:SecretVerifiedUntil = [DateTimeOffset]::Now.AddSeconds($secretVerificationSeconds)') -and $mainSource.Contains('[Microsoft.Win32.SystemEvents]::add_SessionSwitch') -and $mainSource.Contains("'SessionLock'")) -Name 'Secret verification uses a fixed process-memory window that is revoked when Windows locks'
+Assert-True -Condition ($mainSource.Contains('$script:SecretVerifiedDeadlineTimestamp') -and $mainSource.Contains('[Diagnostics.Stopwatch]::GetTimestamp() -lt $script:SecretVerifiedDeadlineTimestamp') -and $mainSource.Contains('$script:SecretVerifiedDeadlineTimestamp = [int64]0')) -Name 'Verification expiry uses a monotonic deadline that system-clock changes cannot extend'
+Assert-True -Condition ($mainSource.Contains('$script:RecentInteractiveAuthenticationUntil = [DateTimeOffset]::Now.AddSeconds($secretVerificationSeconds)') -and $mainSource.Contains('$script:SecretVerifiedUntil = $script:RecentInteractiveAuthenticationUntil')) -Name 'Recent startup sign-in can satisfy only the unexpired remainder of the same fixed verification window'
+Assert-True -Condition ($mainSource.Contains('$script:PendingCredentialVerificationGeneration = [int]$VerificationGeneration') -and $mainSource.Contains('$script:PendingBitLockerVerificationGeneration = [int]$VerificationGeneration') -and $mainSource.Contains('Invoke-CredentialAction -Action $action -VerificationGranted -VerificationGeneration $verificationGeneration') -and $mainSource.Contains('Invoke-BitLockerAction -Action $action -VerificationGranted -VerificationGeneration $verificationGeneration') -and $mainSource.Contains('Test-SecretVerificationGeneration -Generation $verificationGeneration')) -Name 'In-flight LAPS and BitLocker reads remain bound to the verification generation that started them'
+$grantCalls = @($mainAst.FindAll({
+    param($node)
+    $node -is [System.Management.Automation.Language.CommandAst] -and $node.GetCommandName() -eq 'Set-SecretVerificationGranted'
+}, $true))
+$unboundGrantCalls = @($grantCalls | Where-Object {
+    @($_.CommandElements | Where-Object {
+        $_ -is [System.Management.Automation.Language.CommandParameterAst] -and $_.ParameterName -eq 'ExpectedGeneration'
+    }).Count -eq 0
+})
+Assert-True -Condition ($grantCalls.Count -gt 0 -and $unboundGrantCalls.Count -eq 0) -Name 'Every verification grant is atomically bound to the generation that initiated it'
+Assert-True -Condition ($mainSource.Contains('$script:AuthenticationVerificationGeneration = [int]$authenticationSnapshot.Generation') -and $mainSource.Contains('Set-RecentInteractiveAuthentication -ExpectedGeneration ([int]$script:AuthenticationVerificationGeneration)') -and $mainSource.Contains('Use-RecentInteractiveAuthentication -ExpectedGeneration $expectedGeneration')) -Name 'Startup authentication cannot grant recovery access after a Windows session change'
+Assert-True -Condition ($mainSource.Contains('$result.Password = $null') -and $mainSource.Contains('$result.RecoveryKey = $null') -and $mainSource.Contains('Verification expired or the Windows session changed.')) -Name 'Recovery payloads are zeroed if verification expires or Windows changes before Graph returns'
+Assert-True -Condition ($mainSource.Contains('$failedRecoveryAction = $script:PendingCredentialAction') -and $mainSource.Contains('$failedRecoveryAction = $script:PendingBitLockerAction') -and $mainSource.Contains('Set-RecoveryActionFocus -Kind $failedRecoveryKind -Action ([string]$failedRecoveryAction)')) -Name 'Failed recovery reads restore keyboard focus to the initiating action'
+Assert-True -Condition ($settingsExampleSource.Contains("SecretVerificationMode    = 'Preferred'") -and $settingsExampleSource.Contains('SecretVerificationSeconds = 600')) -Name 'Public settings default to preferred verification with a ten-minute fixed window'
+Assert-True -Condition ($mainSource.Contains('x:Name="CancelVerificationButton"') -and $mainSource.Contains('$CancelVerificationButton.Add_Click({ Stop-SecretVerification })')) -Name 'Microsoft verification can be canceled without starting a recovery read'
+Assert-True -Condition ($mainSource.Contains('KeyboardNavigation.TabNavigation="Cycle"') -and $mainSource.Contains('KeyboardNavigation.DirectionalNavigation="Cycle"') -and $mainSource.Contains('AutomationProperties.LiveSetting="Polite"') -and $mainSource.Contains("`$AuthOverlay.Visibility -eq 'Visible'")) -Name 'Verification overlay traps keyboard navigation, announces status, and suppresses background shortcuts'
+Assert-True -Condition ($mainSource.Contains("if (`$operationName -eq 'MicrosoftVerification') {") -and $mainSource.Contains('[M365Workbench.Security.SecureClipboard]::ClearIfUnchanged()') -and $mainSource.Contains('$script:LastDeviceCode = $null')) -Name 'Device codes are cleared from the protected clipboard on terminal verification paths'
 $shortcutInstallerSource = [IO.File]::ReadAllText($shortcutInstallerPath)
 Assert-True -Condition ($shortcutInstallerSource.Contains('M365 Workbench.lnk') -and $shortcutInstallerSource.Contains('$shortcut.IconLocation = "$launcherPath,0"')) -Name 'Desktop shortcut uses the M365 Workbench name and embedded launcher icon'
 Assert-True -Condition ($shortcutInstallerSource.Contains("`$appUserModelId = '$expectedAppUserModelId'") -and $shortcutInstallerSource.Contains('[M365Workbench.WindowsShellIdentity]::SetShortcutAppId($shortcutPath, $appUserModelId)')) -Name 'Desktop shortcut and running app share one Windows shell identity'
@@ -367,6 +502,9 @@ if ($visualPreviewExitCode -eq 0 -and (Test-Path -LiteralPath $visualPreviewTest
 }
 Assert-True -Condition $separatorPixelsAreStable -Name 'Focused recovery cell preserves every selected-row column separator in the rendered preview'
 Assert-True -Condition $tableCornerIsClean -Name 'Rounded device table does not expose rectangular child backgrounds at its corners'
+$authVisualPreviewOutput = & $powerShellExecutable -NoLogo -NoProfile -NonInteractive -STA -File $mainScriptPath -DemoMode -RenderPreviewPath $authVisualPreviewTestPath -RenderPreviewState MicrosoftVerification 2>&1
+$authVisualPreviewExitCode = $LASTEXITCODE
+Assert-True -Condition ($authVisualPreviewExitCode -eq 0 -and (Test-Path -LiteralPath $authVisualPreviewTestPath -PathType Leaf)) -Name 'Microsoft verification overlay renders in the offline visual suite'
 $xamlMatch = [regex]::Match($mainSource, "(?s)\`$xaml = @'\r?\n(?<xaml>.*?)\r?\n'@")
 Assert-True -Condition $xamlMatch.Success -Name 'Embedded WPF markup is discoverable for validation'
 $xamlIsValidXml = $false
@@ -397,6 +535,12 @@ $inputCollection.Dispose()
 $outputCollection.Dispose()
 $powerShell.Dispose()
 $runspace.Dispose()
+
+foreach ($generatedTestArtifact in @($launcherTestPath, $shortcutIdentityTestPath, $visualPreviewTestPath, $authVisualPreviewTestPath)) {
+    if (Test-Path -LiteralPath $generatedTestArtifact -PathType Leaf) {
+        Remove-Item -LiteralPath $generatedTestArtifact -Force
+    }
+}
 
 Write-Host ''
 Write-Host "$($script:Passed) passed; $($script:Failed) failed"

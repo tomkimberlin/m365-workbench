@@ -19,6 +19,7 @@ M365 Workbench is a Windows desktop utility for Microsoft Entra ID and Microsoft
 - Shows device, management, compliance, encryption, sync, and approximate Entra activity details.
 - Opens the selected device directly in the Intune or Entra admin center.
 - Retrieves one selected LAPS password or BitLocker recovery key only after an explicit copy or reveal action.
+- Verifies the current Windows user before recovery access and uses a fresh Microsoft device-code verification when local verification is unavailable.
 - Excludes copied secrets from Windows Clipboard History and Cloud Clipboard and clears them after a configurable interval.
 
 All screenshots, tests, and demo records use fictional `contoso` identities and explicit `DEMO-DEVICE-*` identifiers.
@@ -60,6 +61,17 @@ pwsh.exe -NoLogo -NoProfile -File .\Install-DesktopShortcut.ps1
 
 The app reuses Microsoft Graph's secure `CurrentUser` token cache when a valid delegated context already exists. If sign-in is required, it displays a device code and opens Microsoft's sign-in page in the default browser.
 
+By default, the first recovery action asks Windows to verify the current user with an available PIN, biometric, or Windows Hello method. That verification is remembered in process memory for ten minutes. If local Windows verification is unavailable, a fresh interactive Microsoft sign-in completed during app startup can satisfy the fallback for the remainder of the same fixed window. Otherwise, the app displays a new Microsoft device code without replacing or clearing the reusable Graph session. Conditional Access determines whether the Microsoft step also requires MFA; the app does not claim that a device-code completion is inherently MFA.
+
+These settings control that behavior:
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `SecretVerificationMode` | `Preferred` | Use Windows verification first, then Microsoft verification only when Windows reports that local verification is unavailable. |
+| `SecretVerificationSeconds` | `600` | Fixed verification window, from 60 to 3600 seconds. It does not slide with continued use. |
+
+`Required` disables the Microsoft fallback and permits recovery only after local Windows verification. `Disabled` is an explicit administrative opt-out. Windows 10 remains supported through feature detection and the Microsoft fallback when the desktop Windows verification interface is unavailable.
+
 ## Try it without a tenant
 
 Demo mode is entirely local. It does not load a settings file, authenticate, or call Microsoft Graph.
@@ -96,6 +108,9 @@ M365 Workbench handles privileged recovery material, so its recovery flow is del
 - Tenant-specific settings are local and ignored by Git.
 - Inventory refreshes request metadata only, never LAPS passwords or BitLocker key values.
 - A secret is fetched only for the selected device and only after **Copy** or **Reveal briefly**.
+- Both newly fetched and briefly cached recovery values pass through the same user-verification gate.
+- Local verification is revoked when its fixed timer expires, when Windows locks or disconnects the session, and when the app closes.
+- The Microsoft fallback runs in a separate process-scoped Graph session, validates the configured tenant and account, requires a newly observed device code, and returns no token to the app.
 - Secrets are not intentionally written to files, logs, or PowerShell history.
 - Revealed secrets hide automatically, and copied secrets are cleared only if the clipboard still contains the value written by this app.
 - Intune and recovery records are joined by Entra device ID, not mutable device name.
