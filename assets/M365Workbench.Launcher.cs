@@ -23,15 +23,7 @@ namespace M365Workbench
                     throw new FileNotFoundException("M365 Workbench could not be found.", scriptPath);
                 }
 
-                string powerShellPath = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                    "Microsoft",
-                    "WindowsApps",
-                    "pwsh.exe");
-                if (!File.Exists(powerShellPath))
-                {
-                    throw new FileNotFoundException("PowerShell 7 was not found in the Windows app execution aliases.", powerShellPath);
-                }
+                string powerShellPath = ResolvePowerShell();
 
                 var startInfo = new ProcessStartInfo
                 {
@@ -60,6 +52,30 @@ namespace M365Workbench
         private static string Quote(string value)
         {
             return "\"" + value.Replace("\"", "\\\"") + "\"";
+        }
+
+        private static string ResolvePowerShell()
+        {
+            // Prefer the machine installation; the Store alias is not the only
+            // supported way to install PowerShell 7.
+            string[] candidates = {
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "PowerShell", "7", "pwsh.exe"),
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Microsoft", "WindowsApps", "pwsh.exe")
+            };
+            foreach (string candidate in candidates)
+                if (File.Exists(candidate)) return candidate;
+            foreach (string entry in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator))
+            {
+                string directory = entry.Trim().Trim('"');
+                if (directory.Length == 0 || !Path.IsPathRooted(directory)) continue;
+                try
+                {
+                    string candidate = Path.Combine(directory, "pwsh.exe");
+                    if (File.Exists(candidate)) return candidate;
+                }
+                catch (ArgumentException) { }
+            }
+            throw new FileNotFoundException("PowerShell 7.4 or newer is required. Install PowerShell, then open M365 Workbench again.");
         }
     }
 }

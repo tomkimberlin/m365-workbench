@@ -38,3 +38,7 @@ Use `contoso.com`, `contoso.onmicrosoft.com`, reserved example identifiers, and 
 - Keep secrets out of disk-backed caches and clear in-memory and displayed values promptly.
 - Preserve tenant, expected-account, delegated-context, and scope validation.
 - Treat every recovery-key request as a sensitive, auditable read.
+
+## Local security boundary
+
+The app is a local administrative convenience, not a hardened credential vault. Clearing references cannot guarantee immediate erasure of immutable .NET strings, copies held by the Graph SDK, operating-system paging, or crash dumps. Windows clipboard exclusion formats request that Windows omit an item from history and cloud synchronization; they do not prevent another local process or a third-party clipboard manager from reading it. Forced termination or a machine crash can prevent clipboard cleanup. Keep the workstation trusted and use device-management and endpoint-security controls appropriate for privileged recovery access.

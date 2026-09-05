@@ -31,6 +31,8 @@ All screenshots, tests, and demo records use fictional `contoso` identities and 
 - `Microsoft.Graph.Authentication` 2.38.0 or later
 - A Microsoft Entra work or school account in the configured tenant
 
+Both the standard PowerShell installer and Microsoft Store installation are supported. The launcher also checks absolute directories on `PATH`. The window title identifies the current build as `2026.09.05`.
+
 ## Quick start
 
 Clone the repository and install the Graph authentication module:
@@ -80,6 +82,8 @@ Demo mode is entirely local. It does not load a settings file, authenticate, or 
 pwsh.exe -NoLogo -NoProfile -STA -File .\M365Workbench.ps1 -DemoMode
 ```
 
+Off-screen preview rendering requires `-DemoMode`; live tenant data cannot be exported through the preview switch.
+
 ## Microsoft Graph permissions
 
 The current workspace requests these delegated scopes together:
@@ -113,6 +117,7 @@ M365 Workbench handles privileged recovery material, so its recovery flow is del
 - The Microsoft fallback runs in a separate process-scoped Graph session, validates the configured tenant and account, requires a newly observed device code, and returns no token to the app.
 - Secrets are not intentionally written to files, logs, or PowerShell history.
 - Revealed secrets hide automatically, and copied secrets are cleared only if the clipboard still contains the value written by this app.
+- Reveal and clipboard deadlines use elapsed time, so changing the Windows clock cannot extend them. Busy clipboard cleanup retries; normal closing waits for pending cleanup rather than silently abandoning it.
 - Intune and recovery records are joined by Entra device ID, not mutable device name.
 - There is no bulk secret export path.
 
@@ -127,7 +132,9 @@ See [SECURITY.md](SECURITY.md) to report a vulnerability. Never put production t
 
 ## Tests
 
-The offline suite parses the PowerShell and WPF markup and validates data joining, authentication-context enforcement, secret decoding, portal-link validation, metadata-only inventory, clipboard protection, the no-console launcher, and key UI regressions. It does not connect to Microsoft Graph.
+The offline suite parses the PowerShell and WPF markup and validates data joining, authentication-context enforcement, secret decoding, portal-link validation, metadata-only inventory, clipboard protection, the no-console launcher, and key UI regressions. It also executes the production recovery operations with synthetic Graph responses and tests clipboard race/cleanup behavior with native-call shims. It does not connect to Microsoft Graph or overwrite your clipboard. Generated test files are placed in a unique system temporary directory and cleaned up on exit.
+
+See the [September 2026 audit notes](docs/AUDIT-2026-09-05.md) for fixed issues, verification coverage, and remaining limits.
 
 ```powershell
 pwsh.exe -NoLogo -NoProfile -File .\Tests\Test-M365Workbench.ps1

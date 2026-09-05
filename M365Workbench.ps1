@@ -10,6 +10,23 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+# Anchor short-lived UI/clipboard deadlines to elapsed time, not the adjustable
+# Windows clock. Keep DateTimeOffset only as the existing deadline representation.
+$script:SensitiveClockOrigin = [DateTimeOffset]::UtcNow
+$script:SensitiveClock = [Diagnostics.Stopwatch]::StartNew()
+function Get-SensitiveClockNow {
+    return $script:SensitiveClockOrigin.AddTicks($script:SensitiveClock.Elapsed.Ticks)
+}
+
+if (-not [string]::IsNullOrWhiteSpace($RenderPreviewPath) -and -not $DemoMode) {
+    throw 'Preview rendering requires -DemoMode. Live tenant data must not be rendered to disk.'
+}
+
+$script:AppStarted = $false
+try {
+if ($PSVersionTable.PSVersion -lt [version]'7.4') {
+    throw 'PowerShell 7.4 or newer is required.'
+}
 $appRoot = $PSScriptRoot
 $settingsPath = Join-Path $appRoot 'M365Workbench.settings.psd1'
 $coreModulePath = Join-Path $appRoot 'M365Workbench.Core.psm1'
@@ -83,6 +100,9 @@ if ($null -eq ('M365Workbench.Security.SecureClipboard' -as [type])) {
 if ($null -eq ('M365Workbench.Security.WindowsHelloVerifier' -as [type])) {
     Add-Type -Path $windowsHelloPath
 }
+if ($null -eq ('M365Workbench.Security.WindowsSessionNotifications' -as [type])) {
+    Add-Type -Path (Join-Path $appRoot 'WindowsSessionNotifications.cs')
+}
 
 if ([Threading.Thread]::CurrentThread.GetApartmentState() -ne [Threading.ApartmentState]::STA) {
     [System.Windows.MessageBox]::Show(
@@ -97,7 +117,7 @@ if ([Threading.Thread]::CurrentThread.GetApartmentState() -ne [Threading.Apartme
 $xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="M365 Workbench"
+        Title="M365 Workbench · 2026.09.05"
         Width="1280" Height="780" MinWidth="1100" MinHeight="680"
         WindowStartupLocation="CenterScreen"
         Background="#F5F7FB"
@@ -1466,8 +1486,18 @@ param($CoreModulePath)
         param([Parameter(Mandatory)][string]$Uri)
 
         $items = [System.Collections.Generic.List[object]]::new()
+        $visited = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
         $next = $Uri
         while (-not [string]::IsNullOrWhiteSpace($next)) {
+            $pageUri = [uri]$next
+            if (-not $pageUri.IsAbsoluteUri -or $pageUri.Scheme -ne 'https' -or
+                $pageUri.Host -ne 'graph.microsoft.com' -or -not $pageUri.IsDefaultPort -or
+                $pageUri.UserInfo -or $pageUri.Fragment -or -not $pageUri.AbsolutePath.StartsWith('/v1.0/')) {
+                throw 'Microsoft Graph returned an untrusted inventory page link.'
+            }
+            if (-not $visited.Add($pageUri.AbsoluteUri) -or $visited.Count -gt 10000) {
+                throw 'Microsoft Graph inventory pagination did not complete safely.'
+            }
             $response = Invoke-MgGraphRequest -Method GET -Uri $next -OutputType PSObject -ErrorAction Stop
             foreach ($item in @($response.value)) {
                 if ($null -ne $item) { $items.Add($item) }
@@ -1516,6 +1546,9 @@ param($DeviceId, $CoreModulePath)
 & {
     $ErrorActionPreference = 'Stop'
     Import-Module $CoreModulePath -Force
+    $response = $null
+    $credential = $null
+    $password = $null
 
     try {
         $parsedId = [Guid]::Empty
@@ -1524,10 +1557,14 @@ param($DeviceId, $CoreModulePath)
         }
 
         $escapedId = [Uri]::EscapeDataString($parsedId.ToString())
-        $uri = "https://graph.microsoft.com/v1.0/directory/deviceLocalCredentials/$escapedId`?`$select=deviceName,lastBackupDateTime,refreshDateTime,credentials"
+        $uri = "https://graph.microsoft.com/v1.0/directory/deviceLocalCredentials/$escapedId`?`$select=id,deviceName,lastBackupDateTime,refreshDateTime,credentials"
         $response = Invoke-MgGraphRequest -Method GET -Uri $uri -OutputType PSObject -ErrorAction Stop
         if ($null -ne $response.PSObject.Properties['value'] -and $null -ne $response.value) {
             $response = $response.value
+        }
+
+        if ([guid]$response.id -ne $parsedId) {
+            throw 'Microsoft Graph returned a LAPS credential for a different device.'
         }
 
         $credential = Select-CurrentLapsCredential -Credentials @($response.credentials)
@@ -1553,9 +1590,6 @@ param($DeviceId, $CoreModulePath)
             BackupDateTime = [DateTimeOffset]$credential.backupDateTime
             Password = $password
         }
-        $password = $null
-        $response = $null
-        $credential = $null
     }
     catch {
         $statusCode = $null
@@ -1571,6 +1605,16 @@ param($DeviceId, $CoreModulePath)
         }
         [pscustomobject]@{ Kind = 'Error'; ErrorCode = $errorCode; Message = [string]$_.Exception.Message; StatusCode = $statusCode }
     }
+    finally {
+        if ($null -ne $response -and $null -ne $response.PSObject.Properties['credentials']) {
+            foreach ($item in @($response.credentials)) {
+                if ($null -ne $item -and $null -ne $item.PSObject.Properties['passwordBase64']) { $item.passwordBase64 = $null }
+            }
+        }
+        $password = $null
+        $credential = $null
+        $response = $null
+    }
 }
 '@
 
@@ -1579,6 +1623,8 @@ param($DeviceId, $RecoveryKeyId, $CoreModulePath)
 & {
     $ErrorActionPreference = 'Stop'
     Import-Module $CoreModulePath -Force
+    $response = $null
+    $recoveryKey = $null
 
     try {
         $parsedDeviceId = [Guid]::Empty
@@ -1593,6 +1639,9 @@ param($DeviceId, $RecoveryKeyId, $CoreModulePath)
         $escapedKeyId = [Uri]::EscapeDataString($parsedKeyId.ToString())
         $uri = "https://graph.microsoft.com/v1.0/informationProtection/bitlocker/recoveryKeys/$escapedKeyId`?`$select=id,key,deviceId,createdDateTime,volumeType"
         $response = Invoke-MgGraphRequest -Method GET -Uri $uri -OutputType PSObject -ErrorAction Stop
+        if ([guid]$response.id -ne $parsedKeyId) {
+            throw 'Microsoft Graph returned a different BitLocker recovery-key record.'
+        }
         if (-not [string]::Equals([string]$response.deviceId, $parsedDeviceId.ToString(), [StringComparison]::OrdinalIgnoreCase)) {
             throw 'Microsoft Graph returned a BitLocker key for a different device.'
         }
@@ -1610,8 +1659,6 @@ param($DeviceId, $RecoveryKeyId, $CoreModulePath)
             VolumeType = [string]$response.volumeType
             RecoveryKey = $recoveryKey
         }
-        $recoveryKey = $null
-        $response = $null
     }
     catch {
         $statusCode = $null
@@ -1626,6 +1673,11 @@ param($DeviceId, $RecoveryKeyId, $CoreModulePath)
             [string]$_.FullyQualifiedErrorId
         }
         [pscustomobject]@{ Kind = 'Error'; ErrorCode = $errorCode; Message = [string]$_.Exception.Message; StatusCode = $statusCode }
+    }
+    finally {
+        if ($null -ne $response -and $null -ne $response.PSObject.Properties['key']) { $response.key = $null }
+        $recoveryKey = $null
+        $response = $null
     }
 }
 '@
@@ -1697,7 +1749,7 @@ function Show-Toast {
     }
     $ToastText.Text = $Message
     $ToastBorder.Visibility = 'Visible'
-    $script:ToastExpiresAt = [DateTimeOffset]::Now.AddSeconds(4)
+    $script:ToastExpiresAt = (Get-SensitiveClockNow).AddSeconds(4)
 }
 
 function Set-PasswordStatus {
@@ -1769,7 +1821,7 @@ function Clear-SecretDisplay {
 
 function Update-ClipboardStatusForSelection {
     $selected = Get-SelectedDevice
-    $now = [DateTimeOffset]::Now
+    $now = Get-SensitiveClockNow
     if ($null -ne $selected -and
         -not [string]::IsNullOrWhiteSpace([string]$script:ClipboardDeviceId) -and
         [string]::Equals([string]$selected.EntraDeviceId, [string]$script:ClipboardDeviceId, [StringComparison]::OrdinalIgnoreCase) -and
@@ -1837,6 +1889,19 @@ function Open-SelectedDevicePortal {
     }
 }
 
+function Clear-AuthenticationClipboard {
+    try {
+        $null = [M365Workbench.Security.SecureClipboard]::ClearIfUnchanged()
+        $script:ClipboardClearAt = [DateTimeOffset]::MinValue
+        $script:ClipboardDeviceId = $null
+        $script:ClipboardKind = $null
+        $script:ClipboardRecoveryKeyId = $null
+    }
+    catch {
+        $script:ClipboardClearAt = Get-SensitiveClockNow
+    }
+}
+
 function Set-DeviceCode {
     param([Parameter(Mandatory)][string]$Code)
 
@@ -1847,7 +1912,7 @@ function Set-DeviceCode {
     $OpenSignInButton.IsEnabled = $true
 
     try {
-        [M365Workbench.Security.SecureClipboard]::SetSensitiveText($Code)
+        [M365Workbench.Security.SecureClipboard]::SetSensitiveText($Code, ([System.Windows.Interop.WindowInteropHelper]::new($window)).Handle)
     }
     catch {
         $AuthOverlayStatus.Text = 'The code is shown above. Copy it manually if needed.'
@@ -2571,10 +2636,10 @@ function Update-FilteredCount {
         return
     }
 
-    $visibleCount = @($script:DeviceView).Count
-    $lapsReadyCount = @($script:AllDevices | Where-Object LapsAvailable).Count
-    $bitLockerReadyCount = @($script:AllDevices | Where-Object BitLockerAvailable).Count
-    $entraOnlyCount = @($script:AllDevices | Where-Object IsEntraOnly).Count
+    $visibleCount = $script:DeviceView.Count
+    $lapsReadyCount = $script:InventoryCounts.Laps
+    $bitLockerReadyCount = $script:InventoryCounts.BitLocker
+    $entraOnlyCount = $script:InventoryCounts.EntraOnly
     $EntraOnlyFilterCount.Text = [string]$entraOnlyCount
     $EntraOnlyFilterContainer.Visibility = if ($entraOnlyCount -gt 0) { 'Visible' } else { 'Collapsed' }
     if ($entraOnlyCount -eq 0 -and $EntraOnlyCheckBox.IsChecked -eq $true) {
@@ -2609,13 +2674,12 @@ function Refresh-DeviceFilter {
 
     $script:DeviceView.Refresh()
     Update-FilteredCount
-    $visible = @($script:DeviceView)
-    if ($visible.Count -eq 0) {
+    if ($script:DeviceView.IsEmpty) {
         $DeviceGrid.SelectedItem = $null
         Update-DetailPanel
     }
-    elseif ($null -eq $DeviceGrid.SelectedItem -or -not $visible.Contains($DeviceGrid.SelectedItem)) {
-        $DeviceGrid.SelectedItem = $visible[0]
+    elseif ($null -eq $DeviceGrid.SelectedItem -or -not $script:DeviceView.Contains($DeviceGrid.SelectedItem)) {
+        $DeviceGrid.SelectedItem = $script:DeviceView.GetItemAt(0)
         $DeviceGrid.ScrollIntoView($DeviceGrid.SelectedItem)
     }
 }
@@ -2626,6 +2690,11 @@ function Set-DeviceInventory {
     $previousSelection = Get-SelectedDevice
     $previousDeviceId = if ($null -eq $previousSelection) { $null } else { [string]$previousSelection.EntraDeviceId }
     $script:AllDevices = @($Devices)
+    $script:InventoryCounts = @{
+        Laps = @($Devices | Where-Object LapsAvailable).Count
+        BitLocker = @($Devices | Where-Object BitLockerAvailable).Count
+        EntraOnly = @($Devices | Where-Object IsEntraOnly).Count
+    }
     $collection = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
     foreach ($device in $script:AllDevices) {
         $collection.Add($device)
@@ -2684,15 +2753,15 @@ function Complete-CredentialAction {
 
     $script:CurrentCredential = $Credential
     $script:CurrentCredentialDeviceId = [string]$Credential.DeviceId
-    $script:CredentialExpiresAt = [DateTimeOffset]::Now.AddSeconds([int]$settings.RevealSeconds)
+    $script:CredentialExpiresAt = (Get-SensitiveClockNow).AddSeconds([int]$settings.RevealSeconds)
     $AccountNameText.Text = [string]$Credential.AccountName
     $CopyAccountButton.IsEnabled = $true
     $CopyPasswordButtonText.Text = 'Copy password'
 
     if ($Action -eq 'Copy') {
         try {
-            [M365Workbench.Security.SecureClipboard]::SetSensitiveText([string]$Credential.Password)
-            $script:ClipboardClearAt = [DateTimeOffset]::Now.AddSeconds([int]$settings.ClipboardClearSeconds)
+            [M365Workbench.Security.SecureClipboard]::SetSensitiveText([string]$Credential.Password, ([System.Windows.Interop.WindowInteropHelper]::new($window)).Handle)
+            $script:ClipboardClearAt = (Get-SensitiveClockNow).AddSeconds([int]$settings.ClipboardClearSeconds)
             $script:ClipboardDeviceId = [string]$selected.EntraDeviceId
             $script:ClipboardKind = 'LAPS'
             $script:ClipboardRecoveryKeyId = $null
@@ -2798,13 +2867,13 @@ function Complete-BitLockerAction {
     $script:CurrentBitLockerKey = $KeyResult
     $script:CurrentBitLockerDeviceId = [string]$KeyResult.DeviceId
     $script:CurrentBitLockerKeyId = [string]$KeyResult.RecoveryKeyId
-    $script:BitLockerExpiresAt = [DateTimeOffset]::Now.AddSeconds([int]$settings.RevealSeconds)
+    $script:BitLockerExpiresAt = (Get-SensitiveClockNow).AddSeconds([int]$settings.RevealSeconds)
     $CopyRecoveryKeyButtonText.Text = 'Copy recovery key'
 
     if ($Action -eq 'Copy') {
         try {
-            [M365Workbench.Security.SecureClipboard]::SetSensitiveText([string]$KeyResult.RecoveryKey)
-            $script:ClipboardClearAt = [DateTimeOffset]::Now.AddSeconds([int]$settings.ClipboardClearSeconds)
+            [M365Workbench.Security.SecureClipboard]::SetSensitiveText([string]$KeyResult.RecoveryKey, ([System.Windows.Interop.WindowInteropHelper]::new($window)).Handle)
+            $script:ClipboardClearAt = (Get-SensitiveClockNow).AddSeconds([int]$settings.ClipboardClearSeconds)
             $script:ClipboardDeviceId = [string]$selected.EntraDeviceId
             $script:ClipboardKind = 'BitLocker'
             $script:ClipboardRecoveryKeyId = [string]$selectedKey.Id
@@ -2929,7 +2998,7 @@ function Complete-GraphOperation {
     $script:CurrentOperation = $null
 
     if ($operationName -eq 'MicrosoftVerification') {
-        try { $null = [M365Workbench.Security.SecureClipboard]::ClearIfUnchanged() } catch { }
+        Clear-AuthenticationClipboard
         $script:LastDeviceCode = $null
         $script:SignInPageOpenedForCode = $null
         $AuthOverlay.Visibility = 'Collapsed'
@@ -2979,7 +3048,7 @@ function Complete-GraphOperation {
             $friendly = "$friendly Failed while loading $([string]$stageProperty.Value)."
         }
         if ($operationName -eq 'Authenticate') {
-            try { $null = [M365Workbench.Security.SecureClipboard]::ClearIfUnchanged() } catch { }
+            Clear-AuthenticationClipboard
             $script:LastDeviceCode = $null
             $script:SignInPageOpenedForCode = $null
             $AuthOverlay.Visibility = 'Collapsed'
@@ -3024,13 +3093,9 @@ function Complete-GraphOperation {
 
     switch ($operationName) {
         'Authenticate' {
-            $null = [M365Workbench.Security.SecureClipboard]::ClearIfUnchanged()
+            Clear-AuthenticationClipboard
             $script:LastDeviceCode = $null
             $script:SignInPageOpenedForCode = $null
-            $script:ClipboardClearAt = [DateTimeOffset]::MinValue
-            $script:ClipboardDeviceId = $null
-            $script:ClipboardKind = $null
-            $script:ClipboardRecoveryKeyId = $null
             $AuthOverlay.Visibility = 'Collapsed'
             Set-AuthenticationDisplay -SignedIn $true -Text ([string]$result.Account)
             if ($script:AuthenticationDeviceCodeObserved -and $null -ne $script:AuthenticationVerificationGeneration) {
@@ -3160,10 +3225,14 @@ function Save-WindowPreview {
     try { $encoder.Save($stream) } finally { $stream.Dispose() }
 }
 
+$searchDebounceTimer = [System.Windows.Threading.DispatcherTimer]::new()
+$searchDebounceTimer.Interval = [TimeSpan]::FromMilliseconds(150)
+$searchDebounceTimer.Add_Tick({ $searchDebounceTimer.Stop(); Refresh-DeviceFilter })
 $SearchBox.Add_TextChanged({
     $SearchHint.Visibility = if ([string]::IsNullOrEmpty($SearchBox.Text) -and -not $SearchBox.IsKeyboardFocusWithin) { 'Visible' } else { 'Collapsed' }
     $ClearSearchButton.Visibility = if ([string]::IsNullOrEmpty($SearchBox.Text)) { 'Collapsed' } else { 'Visible' }
-    Refresh-DeviceFilter
+    $searchDebounceTimer.Stop()
+    $searchDebounceTimer.Start()
 })
 $SearchBox.Add_GotKeyboardFocus({ $SearchHint.Visibility = 'Collapsed' })
 $SearchBox.Add_LostKeyboardFocus({
@@ -3229,8 +3298,8 @@ $RevealRecoveryKeyButton.Add_Click({ Invoke-BitLockerAction -Action 'Reveal' })
 $CopyAccountButton.Add_Click({
     if (-not [string]::IsNullOrWhiteSpace($AccountNameText.Text) -and $AccountNameText.Text -ne 'Retrieved with password') {
         try {
-            [M365Workbench.Security.SecureClipboard]::SetSensitiveText($AccountNameText.Text)
-            $script:ClipboardClearAt = [DateTimeOffset]::Now.AddSeconds(20)
+            [M365Workbench.Security.SecureClipboard]::SetSensitiveText($AccountNameText.Text, ([System.Windows.Interop.WindowInteropHelper]::new($window)).Handle)
+            $script:ClipboardClearAt = (Get-SensitiveClockNow).AddSeconds(20)
             $script:ClipboardDeviceId = $null
             $script:ClipboardKind = 'Account'
             $script:ClipboardRecoveryKeyId = $null
@@ -3249,7 +3318,7 @@ $SignInButton.Add_Click({ Start-Authentication })
 $CopyCodeButton.Add_Click({
     if (-not [string]::IsNullOrWhiteSpace($script:LastDeviceCode)) {
         try {
-            [M365Workbench.Security.SecureClipboard]::SetSensitiveText($script:LastDeviceCode)
+            [M365Workbench.Security.SecureClipboard]::SetSensitiveText($script:LastDeviceCode, ([System.Windows.Interop.WindowInteropHelper]::new($window)).Handle)
             $AuthOverlayStatus.Text = 'Code copied. Complete sign-in in the browser.'
         }
         catch { $AuthOverlayStatus.Text = 'Copy the code manually, then continue in the browser.' }
@@ -3297,10 +3366,10 @@ $window.Add_PreviewKeyDown({
         $selected = Get-SelectedDevice
         $preserveLapsStatus = $script:ClipboardKind -eq 'LAPS' -and $null -ne $selected -and
             [string]::Equals([string]$selected.EntraDeviceId, [string]$script:ClipboardDeviceId, [StringComparison]::OrdinalIgnoreCase) -and
-            $script:ClipboardClearAt -gt [DateTimeOffset]::Now
+            $script:ClipboardClearAt -gt (Get-SensitiveClockNow)
         $preserveBitLockerStatus = $script:ClipboardKind -eq 'BitLocker' -and $null -ne $selected -and
             [string]::Equals([string]$selected.EntraDeviceId, [string]$script:ClipboardDeviceId, [StringComparison]::OrdinalIgnoreCase) -and
-            $script:ClipboardClearAt -gt [DateTimeOffset]::Now
+            $script:ClipboardClearAt -gt (Get-SensitiveClockNow)
         Clear-SecretDisplay -PreservePasswordStatus:$preserveLapsStatus -PreserveBitLockerStatus:$preserveBitLockerStatus
         if ($preserveLapsStatus -or $preserveBitLockerStatus) { $null = Update-ClipboardStatusForSelection }
         $eventArgs.Handled = $true
@@ -3314,7 +3383,7 @@ $pollTimer.Add_Tick({
     if ($null -ne $script:LocalVerificationTask -and $script:LocalVerificationTask.IsCompleted) {
         Complete-LocalSecretVerification
     }
-    $now = [DateTimeOffset]::Now
+    $now = Get-SensitiveClockNow
 
     if ($script:ToastExpiresAt -ne [DateTimeOffset]::MinValue -and $now -ge $script:ToastExpiresAt) {
         $ToastBorder.Visibility = 'Collapsed'
@@ -3328,21 +3397,32 @@ $pollTimer.Add_Tick({
         $clipboardKind = [string]$script:ClipboardKind
         $clipboardRecoveryKeyId = [string]$script:ClipboardRecoveryKeyId
         $clipboardCleared = $false
-        try { $clipboardCleared = [M365Workbench.Security.SecureClipboard]::ClearIfUnchanged() } catch { }
-        $script:ClipboardClearAt = [DateTimeOffset]::MinValue
-        $script:ClipboardDeviceId = $null
-        $script:ClipboardKind = $null
-        $script:ClipboardRecoveryKeyId = $null
-        $selected = Get-SelectedDevice
-        if ($null -ne $selected -and [string]::Equals([string]$selected.EntraDeviceId, $clipboardDeviceId, [StringComparison]::OrdinalIgnoreCase)) {
-            $message = if ($clipboardCleared) { 'Protected clipboard cleared' } else { 'Clipboard content was replaced' }
-            if ($clipboardKind -eq 'LAPS' -and $PasswordText.Text -eq '••••••••••••••••') {
-                Set-PasswordStatus -Message $message -DotColor '#64748B'
-            }
-            elseif ($clipboardKind -eq 'BitLocker' -and $BitLockerKeyText.Text -like '••••••-*' -and
-                $null -ne $BitLockerKeySelector.SelectedItem -and
-                [string]::Equals([string]$BitLockerKeySelector.SelectedItem.Id, $clipboardRecoveryKeyId, [StringComparison]::OrdinalIgnoreCase)) {
-                Set-BitLockerStatus -Message $message -DotColor '#64748B'
+        $clipboardCleanupComplete = $false
+        try {
+            $clipboardCleared = [M365Workbench.Security.SecureClipboard]::ClearIfUnchanged()
+            $clipboardCleanupComplete = $true
+        }
+        catch {
+            # Keep ownership and retry. Contention does not mean somebody replaced the secret.
+            $script:ClipboardClearAt = $now.AddSeconds(1)
+            Set-AppStatus -Message 'Clipboard is busy — secure cleanup will retry'
+        }
+        if ($clipboardCleanupComplete) {
+            $script:ClipboardClearAt = [DateTimeOffset]::MinValue
+            $script:ClipboardDeviceId = $null
+            $script:ClipboardKind = $null
+            $script:ClipboardRecoveryKeyId = $null
+            $selected = Get-SelectedDevice
+            if ($null -ne $selected -and [string]::Equals([string]$selected.EntraDeviceId, $clipboardDeviceId, [StringComparison]::OrdinalIgnoreCase)) {
+                $message = if ($clipboardCleared) { 'Protected clipboard cleared' } else { 'Clipboard content was replaced' }
+                if ($clipboardKind -eq 'LAPS' -and $PasswordText.Text -eq '••••••••••••••••') {
+                    Set-PasswordStatus -Message $message -DotColor '#64748B'
+                }
+                elseif ($clipboardKind -eq 'BitLocker' -and $BitLockerKeyText.Text -like '••••••-*' -and
+                    $null -ne $BitLockerKeySelector.SelectedItem -and
+                    [string]::Equals([string]$BitLockerKeySelector.SelectedItem.Id, $clipboardRecoveryKeyId, [StringComparison]::OrdinalIgnoreCase)) {
+                    Set-BitLockerStatus -Message $message -DotColor '#64748B'
+                }
             }
         }
     }
@@ -3374,27 +3454,46 @@ $pollTimer.Add_Tick({
     }
 })
 
-$sessionSwitchHandler = [Microsoft.Win32.SessionSwitchEventHandler]{
-    param($sender, $eventArgs)
+# WPF's window procedure runs on the PowerShell/UI thread. SystemEvents invokes
+# callbacks on its own thread, where a PowerShell scriptblock has no runspace.
+$sessionMessageHook = [System.Windows.Interop.HwndSourceHook]{
+    param([IntPtr]$hwnd, [int]$message, [IntPtr]$wParam, [IntPtr]$lParam, [ref]$handled)
 
-    if ([string]$eventArgs.Reason -in @('SessionLock', 'SessionLogoff', 'RemoteDisconnect', 'ConsoleDisconnect')) {
+    # WM_WTSSESSION_CHANGE: console/remote disconnect, logoff, SessionLock.
+    if ($message -eq 0x02B1 -and $wParam.ToInt32() -in @(2, 4, 6, 7)) {
+        Clear-SecretVerificationState
+        Clear-SecretDisplay
         try {
-            $window.Dispatcher.Invoke([Action]{
-                Clear-SecretVerificationState
-                Clear-SecretDisplay
-                try { $null = [M365Workbench.Security.SecureClipboard]::ClearIfUnchanged() } catch { }
-                $script:ClipboardClearAt = [DateTimeOffset]::MinValue
-                $script:ClipboardDeviceId = $null
-                $script:ClipboardKind = $null
-                $script:ClipboardRecoveryKeyId = $null
-            }) | Out-Null
+            $null = [M365Workbench.Security.SecureClipboard]::ClearIfUnchanged()
+            $script:ClipboardClearAt = [DateTimeOffset]::MinValue
+            $script:ClipboardDeviceId = $null
+            $script:ClipboardKind = $null
+            $script:ClipboardRecoveryKeyId = $null
         }
-        catch { }
+        catch { $script:ClipboardClearAt = (Get-SensitiveClockNow) }
     }
+    return [IntPtr]::Zero
 }
-[Microsoft.Win32.SystemEvents]::add_SessionSwitch($sessionSwitchHandler)
+$sessionWindowHandle = ([System.Windows.Interop.WindowInteropHelper]::new($window)).EnsureHandle()
+$sessionWindowSource = [System.Windows.Interop.HwndSource]::FromHwnd($sessionWindowHandle)
+$sessionWindowSource.AddHook($sessionMessageHook)
+[M365Workbench.Security.WindowsSessionNotifications]::Register($sessionWindowHandle)
+$window.Add_Closing({
+    param($sender, $eventArgs)
+    try { $null = [M365Workbench.Security.SecureClipboard]::ClearIfUnchanged() }
+    catch {
+        # Keep the timer alive until Windows releases our clipboard item.
+        $eventArgs.Cancel = $true
+        $script:ClipboardClearAt = Get-SensitiveClockNow
+        Show-Toast -Message 'Clipboard is busy. Secure cleanup will retry; close the app again in a moment.' -Kind Error
+        return
+    }
+    [M365Workbench.Security.WindowsSessionNotifications]::Unregister($sessionWindowHandle)
+    $sessionWindowSource.RemoveHook($sessionMessageHook)
+})
 
 $window.Add_Loaded({
+    $script:AppStarted = $true
     $onlyRecoveryReady = if ($settings.ContainsKey('OnlyRecoveryReadyByDefault')) {
         [bool]$settings.OnlyRecoveryReadyByDefault
     }
@@ -3451,6 +3550,7 @@ $window.Add_Loaded({
 })
 
 $window.Add_Closed({
+    $searchDebounceTimer.Stop()
     $pollTimer.Stop()
     Clear-SecretVerificationState
     Clear-SecretDisplay
@@ -3465,19 +3565,25 @@ $window.Add_Closed({
         $script:GraphRunspace.Close()
         $script:GraphRunspace.Dispose()
     }
-    try { [Microsoft.Win32.SystemEvents]::remove_SessionSwitch($sessionSwitchHandler) } catch { }
     # Deliberately do not call Disconnect-MgGraph; retain the secure CurrentUser cache.
 })
 
-try {
     $null = $window.ShowDialog()
 }
 catch {
+    Add-Type -AssemblyName PresentationFramework
+    $safeMessage = if ($script:AppStarted) {
+        'M365 Workbench encountered an unexpected local error. Restart the app and try again.'
+    }
+    else {
+        'M365 Workbench could not start. Check that PowerShell 7.4 or newer is installed, the application files are complete, and M365Workbench.settings.psd1 contains valid settings.'
+    }
     [System.Windows.MessageBox]::Show(
-        'M365 Workbench encountered an unexpected local error. No recovery secret was saved. Restart the app and try again.',
+        $safeMessage,
         'M365 Workbench',
         [System.Windows.MessageBoxButton]::OK,
         [System.Windows.MessageBoxImage]::Error
     ) | Out-Null
-    throw
+    # Do not write raw exception records: they can retain Graph response values.
+    exit 1
 }

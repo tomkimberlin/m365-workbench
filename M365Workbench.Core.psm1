@@ -170,7 +170,7 @@ function Test-BitLockerRecoveryKey {
         return $false
     }
 
-    return [regex]::IsMatch([string]$Value, '^\d{6}(?:-\d{6}){7}$', [Text.RegularExpressions.RegexOptions]::CultureInvariant)
+    return [regex]::IsMatch([string]$Value, '\A[0-9]{6}(?:-[0-9]{6}){7}\z', [Text.RegularExpressions.RegexOptions]::CultureInvariant)
 }
 
 function New-LapsDeviceRow {
@@ -718,7 +718,7 @@ function Get-SecretVerificationDecision {
         return 'Bypass'
     }
 
-    if ($VerifiedUntil -gt $Now) {
+    if ([string]::IsNullOrWhiteSpace($LocalResult) -and $VerifiedUntil -gt $Now) {
         return 'Grant'
     }
 

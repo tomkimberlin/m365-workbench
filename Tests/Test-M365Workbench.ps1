@@ -17,12 +17,15 @@ $shellIdentityPath = Join-Path $appRoot 'assets\WindowsShellIdentity.cs'
 $licensePath = Join-Path $appRoot 'LICENSE'
 $readmePath = Join-Path $appRoot 'README.md'
 $securityPolicyPath = Join-Path $appRoot 'SECURITY.md'
-$launcherTestPath = Join-Path $appRoot 'artifacts\M365Workbench.Launcher.Test.exe'
-$shortcutIdentityTestPath = Join-Path $appRoot "artifacts\M365Workbench.Identity.$PID.Test.lnk"
-$visualPreviewTestPath = Join-Path $appRoot "artifacts\M365Workbench.Visual.$PID.Test.png"
-$authVisualPreviewTestPath = Join-Path $appRoot "artifacts\M365Workbench.AuthVisual.$PID.Test.png"
+$testRoot = Join-Path ([IO.Path]::GetTempPath()) ('m365-workbench-tests-' + [guid]::NewGuid().ToString('N'))
+$null = New-Item -ItemType Directory -Path $testRoot
+$launcherTestPath = Join-Path $testRoot 'M365Workbench.Launcher.Test.exe'
+$shortcutIdentityTestPath = Join-Path $testRoot 'M365Workbench.Identity.Test.lnk'
+$visualPreviewTestPath = Join-Path $testRoot 'M365Workbench.Visual.Test.png'
+$authVisualPreviewTestPath = Join-Path $testRoot 'M365Workbench.AuthVisual.Test.png'
 $expectedAppUserModelId = 'M365Workbench.Desktop'
 
+try {
 Import-Module $modulePath -Force
 if ($null -eq ('M365Workbench.Security.SecureClipboard' -as [type])) {
     Add-Type -Path $clipboardPath
@@ -297,6 +300,7 @@ $actualShortcutAppId = [M365Workbench.WindowsShellIdentity]::GetShortcutAppId($s
 Assert-Equal -Actual $actualShortcutAppId -Expected $expectedAppUserModelId -Name 'Windows shortcut stores the dedicated M365 Workbench AppUserModelID'
 
 $mainSource = [IO.File]::ReadAllText($mainScriptPath)
+. (Join-Path $PSScriptRoot 'Test-SecurityBoundaries.ps1')
 $settingsExampleSource = [IO.File]::ReadAllText((Join-Path $appRoot 'M365Workbench.settings.example.psd1'))
 $fixtureDeviceNames = @([regex]::Matches($mainSource, "(?:deviceName|displayName)='(?<name>[^']+)'" ) | ForEach-Object { $_.Groups['name'].Value })
 $fixtureSerialNumbers = @([regex]::Matches($mainSource, "serialNumber='(?<serial>[^']+)'" ) | ForEach-Object { $_.Groups['serial'].Value })
@@ -399,7 +403,7 @@ finally {
     $cancelEvent.Dispose()
 }
 
-Assert-True -Condition ($mainSource.Contains('$script:SecretVerifiedUntil = [DateTimeOffset]::Now.AddSeconds($secretVerificationSeconds)') -and $mainSource.Contains('[Microsoft.Win32.SystemEvents]::add_SessionSwitch') -and $mainSource.Contains("'SessionLock'")) -Name 'Secret verification uses a fixed process-memory window that is revoked when Windows locks'
+Assert-True -Condition ($mainSource.Contains('$script:SecretVerifiedUntil = [DateTimeOffset]::Now.AddSeconds($secretVerificationSeconds)') -and $mainSource.Contains('[System.Windows.Interop.HwndSourceHook]') -and $mainSource.Contains('@(2, 4, 6, 7)')) -Name 'Secret verification uses a fixed process-memory window revoked by UI-thread Windows session messages'
 Assert-True -Condition ($mainSource.Contains('$script:SecretVerifiedDeadlineTimestamp') -and $mainSource.Contains('[Diagnostics.Stopwatch]::GetTimestamp() -lt $script:SecretVerifiedDeadlineTimestamp') -and $mainSource.Contains('$script:SecretVerifiedDeadlineTimestamp = [int64]0')) -Name 'Verification expiry uses a monotonic deadline that system-clock changes cannot extend'
 Assert-True -Condition ($mainSource.Contains('$script:RecentInteractiveAuthenticationUntil = [DateTimeOffset]::Now.AddSeconds($secretVerificationSeconds)') -and $mainSource.Contains('$script:SecretVerifiedUntil = $script:RecentInteractiveAuthenticationUntil')) -Name 'Recent startup sign-in can satisfy only the unexpired remainder of the same fixed verification window'
 Assert-True -Condition ($mainSource.Contains('$script:PendingCredentialVerificationGeneration = [int]$VerificationGeneration') -and $mainSource.Contains('$script:PendingBitLockerVerificationGeneration = [int]$VerificationGeneration') -and $mainSource.Contains('Invoke-CredentialAction -Action $action -VerificationGranted -VerificationGeneration $verificationGeneration') -and $mainSource.Contains('Invoke-BitLockerAction -Action $action -VerificationGranted -VerificationGeneration $verificationGeneration') -and $mainSource.Contains('Test-SecretVerificationGeneration -Generation $verificationGeneration')) -Name 'In-flight LAPS and BitLocker reads remain bound to the verification generation that started them'
@@ -536,10 +540,14 @@ $outputCollection.Dispose()
 $powerShell.Dispose()
 $runspace.Dispose()
 
+}
+finally {
 foreach ($generatedTestArtifact in @($launcherTestPath, $shortcutIdentityTestPath, $visualPreviewTestPath, $authVisualPreviewTestPath)) {
     if (Test-Path -LiteralPath $generatedTestArtifact -PathType Leaf) {
         Remove-Item -LiteralPath $generatedTestArtifact -Force
     }
+}
+Remove-Item -LiteralPath $testRoot -Force
 }
 
 Write-Host ''

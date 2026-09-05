@@ -1,13 +1,18 @@
 @echo off
 setlocal
 
-set "PWSH_ALIAS=%LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe"
-if not exist "%PWSH_ALIAS%" (
+set "WORKBENCH_PWSH=%ProgramFiles%\PowerShell\7\pwsh.exe"
+if exist "%WORKBENCH_PWSH%" goto launch
+set "WORKBENCH_PWSH=%LOCALAPPDATA%\Microsoft\WindowsApps\pwsh.exe"
+if exist "%WORKBENCH_PWSH%" goto launch
+for %%P in (pwsh.exe) do set "WORKBENCH_PWSH=%%~$PATH:P"
+if not defined WORKBENCH_PWSH (
     echo PowerShell 7 is required but was not found.
     echo Install Microsoft PowerShell 7, then launch this utility again.
     pause
     exit /b 1
 )
 
-start "" "%PWSH_ALIAS%" -NoLogo -NoProfile -STA -WindowStyle Hidden -File "%~dp0M365Workbench.ps1"
+:launch
+start "" "%WORKBENCH_PWSH%" -NoLogo -NoProfile -STA -WindowStyle Hidden -File "%~dp0M365Workbench.ps1"
 exit /b 0

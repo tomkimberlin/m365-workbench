@@ -40,6 +40,9 @@ namespace M365Workbench.Security
         [DllImport("user32.dll")]
         private static extern uint GetClipboardSequenceNumber();
 
+        [DllImport("user32.dll")]
+        private static extern bool IsWindow(IntPtr hWnd);
+
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern IntPtr GlobalAlloc(uint uFlags, UIntPtr dwBytes);
 
@@ -59,26 +62,27 @@ namespace M365Workbench.Security
                 && RegisterClipboardFormat(CloudFormatName) != 0;
         }
 
-        public static void SetSensitiveText(string text)
+        public static void SetSensitiveText(string text, IntPtr ownerWindow)
         {
             if (string.IsNullOrEmpty(text))
             {
                 throw new ArgumentException("Clipboard text cannot be empty.", nameof(text));
             }
+            if (ownerWindow == IntPtr.Zero || !IsWindow(ownerWindow))
+            {
+                throw new ArgumentException("A valid clipboard owner window is required.", nameof(ownerWindow));
+            }
 
             byte[] textBytes = null;
             lock (Gate)
             {
-                OpenClipboardWithRetry();
+                OpenClipboardWithRetry(ownerWindow);
                 try
                 {
                     if (!EmptyClipboard())
                     {
                         throw new Win32Exception(Marshal.GetLastWin32Error(), "Unable to clear the clipboard.");
                     }
-
-                    textBytes = Encoding.Unicode.GetBytes(text + '\0');
-                    SetClipboardBytes(CfUnicodeText, textBytes);
 
                     uint excludeFormat = RegisterRequiredFormat(ExcludeFormatName);
                     uint historyFormat = RegisterRequiredFormat(HistoryFormatName);
@@ -90,11 +94,18 @@ namespace M365Workbench.Security
                     SetClipboardBytes(excludeFormat, new byte[] { 0 });
                     SetClipboardBytes(historyFormat, new byte[] { 0, 0, 0, 0 });
                     SetClipboardBytes(cloudFormat, new byte[] { 0, 0, 0, 0 });
+
+                    textBytes = Encoding.Unicode.GetBytes(text + '\0');
+                    SetClipboardBytes(CfUnicodeText, textBytes);
+                    // Capture ownership while the native clipboard lock still excludes
+                    // other writers. Capturing after CloseClipboard can claim their data.
+                    _ownedSequence = GetClipboardSequenceNumber();
                 }
                 catch
                 {
                     // Fail closed if Windows cannot attach the protection formats.
                     EmptyClipboard();
+                    _ownedSequence = 0;
                     throw;
                 }
                 finally
@@ -105,8 +116,6 @@ namespace M365Workbench.Security
                         CryptographicOperations.ZeroMemory(textBytes);
                     }
                 }
-
-                _ownedSequence = GetClipboardSequenceNumber();
             }
         }
 
@@ -124,7 +133,7 @@ namespace M365Workbench.Security
                     return false;
                 }
 
-                OpenClipboardWithRetry();
+                OpenClipboardWithRetry(IntPtr.Zero);
                 try
                 {
                     if (GetClipboardSequenceNumber() != _ownedSequence)
@@ -202,11 +211,11 @@ namespace M365Workbench.Security
             }
         }
 
-        private static void OpenClipboardWithRetry()
+        private static void OpenClipboardWithRetry(IntPtr ownerWindow)
         {
             for (int attempt = 0; attempt < 8; attempt++)
             {
-                if (OpenClipboard(IntPtr.Zero))
+                if (OpenClipboard(ownerWindow))
                 {
                     return;
                 }
