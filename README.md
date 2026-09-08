@@ -31,7 +31,7 @@ All screenshots, tests, and demo records use fictional `contoso` identities and 
 - `Microsoft.Graph.Authentication` 2.38.0 or later
 - A Microsoft Entra work or school account in the configured tenant
 
-Both the standard PowerShell installer and Microsoft Store installation are supported. The launcher also checks absolute directories on `PATH`. The window title identifies the current build as `2026.09.05`.
+Both the standard PowerShell installer and Microsoft Store installation are supported. The launcher also checks absolute directories on `PATH`. The window title identifies the current build as `2026.09.08`.
 
 ## Quick start
 

@@ -117,7 +117,7 @@ if ([Threading.Thread]::CurrentThread.GetApartmentState() -ne [Threading.Apartme
 $xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="M365 Workbench · 2026.09.05"
+        Title="M365 Workbench · 2026.09.08"
         Width="1280" Height="780" MinWidth="1100" MinHeight="680"
         WindowStartupLocation="CenterScreen"
         Background="#F5F7FB"
@@ -2642,9 +2642,6 @@ function Update-FilteredCount {
     $entraOnlyCount = $script:InventoryCounts.EntraOnly
     $EntraOnlyFilterCount.Text = [string]$entraOnlyCount
     $EntraOnlyFilterContainer.Visibility = if ($entraOnlyCount -gt 0) { 'Visible' } else { 'Collapsed' }
-    if ($entraOnlyCount -eq 0 -and $EntraOnlyCheckBox.IsChecked -eq $true) {
-        $EntraOnlyCheckBox.IsChecked = $false
-    }
     $countParts = [System.Collections.Generic.List[string]]::new()
     $countParts.Add("$visibleCount shown")
     if ($entraOnlyCount -gt 0) {
@@ -2672,6 +2669,12 @@ function Refresh-DeviceFilter {
         return
     }
 
+    # Normalize before refreshing/counting. Unchecking fires a synchronous nested
+    # refresh; doing it inside Update-FilteredCount lets the outer call overwrite
+    # the correct count and empty-state visibility with its stale snapshot.
+    if ($script:InventoryCounts.EntraOnly -eq 0 -and $EntraOnlyCheckBox.IsChecked -eq $true) {
+        $EntraOnlyCheckBox.IsChecked = $false
+    }
     $script:DeviceView.Refresh()
     Update-FilteredCount
     if ($script:DeviceView.IsEmpty) {
