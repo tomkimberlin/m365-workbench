@@ -3,7 +3,7 @@ param(
     [switch]$DemoMode,
     [switch]$NoAutoConnect,
     [string]$RenderPreviewPath,
-    [ValidateSet('Workspace', 'MicrosoftVerification')]
+    [ValidateSet('Workspace', 'MicrosoftVerification', 'LapsClipboard', 'BitLockerClipboard')]
     [string]$RenderPreviewState = 'Workspace'
 )
 
@@ -117,7 +117,7 @@ if ([Threading.Thread]::CurrentThread.GetApartmentState() -ne [Threading.Apartme
 $xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="M365 Workbench · 2026.09.08"
+        Title="M365 Workbench · 2026.09.22"
         Width="1280" Height="780" MinWidth="1100" MinHeight="680"
         WindowStartupLocation="CenterScreen"
         Background="#F5F7FB"
@@ -606,7 +606,7 @@ $xaml = @'
             <Grid VerticalAlignment="Center">
               <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
               <Ellipse x:Name="AuthDot" Width="8" Height="8" Fill="#94A3B8" Margin="0,0,7,0" VerticalAlignment="Center"/>
-              <TextBlock x:Name="AuthStatusText" Grid.Column="1" Text="Checking sign-in..." FontSize="12" FontWeight="SemiBold" Foreground="#475569" VerticalAlignment="Center"/>
+              <TextBlock x:Name="AuthStatusText" Grid.Column="1" Text="Checking sign-in..." FontSize="12" FontWeight="SemiBold" Foreground="#475569" VerticalAlignment="Center" MaxWidth="320" TextTrimming="CharacterEllipsis" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
             </Grid>
           </Border>
           <Button x:Name="SignInButton" Content="Sign in" Style="{StaticResource SecondaryButton}" MinWidth="92"/>
@@ -960,12 +960,13 @@ $xaml = @'
                 <Border Background="#F8FAFC" BorderBrush="#E2E8F0" BorderThickness="1" CornerRadius="9" Padding="13" Margin="0,10,0,0">
                   <StackPanel>
                     <TextBlock Text="LOCAL ADMINISTRATOR" Foreground="#64748B" FontSize="9.5" FontWeight="Bold" VerticalAlignment="Center"/>
-                    <TextBlock x:Name="AccountNameText" Text="Retrieved with password" Foreground="#334155" FontSize="13" FontWeight="SemiBold" Margin="0,5,0,0"/>
+                    <TextBlock x:Name="AccountNameText" Text="Retrieved with password" Foreground="#334155" FontSize="13" FontWeight="SemiBold" Margin="0,5,0,0" TextWrapping="Wrap"/>
                     <TextBlock x:Name="PasswordText" Text="••••••••••••••••" FontFamily="Cascadia Mono, Consolas" FontSize="18" FontWeight="SemiBold" Foreground="#0F172A" Margin="0,10,0,0" TextWrapping="Wrap"/>
-                    <StackPanel Orientation="Horizontal" Margin="0,5,0,0">
-                      <Ellipse x:Name="PasswordStatusDot" Width="6" Height="6" Fill="#94A3B8" Margin="0,0,6,0" VerticalAlignment="Center"/>
-                      <TextBlock x:Name="PasswordCountdownText" Text="Password remains hidden until requested" Foreground="#64748B" FontSize="10.5" TextWrapping="Wrap"/>
-                    </StackPanel>
+                    <Grid Margin="0,5,0,0">
+                      <Grid.ColumnDefinitions><ColumnDefinition Width="12"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                      <Ellipse x:Name="PasswordStatusDot" Width="6" Height="6" Fill="#94A3B8" Margin="0,4,6,0" VerticalAlignment="Top"/>
+                      <TextBlock x:Name="PasswordCountdownText" Grid.Column="1" Text="Password remains hidden until requested" Foreground="#64748B" FontSize="10.5" TextWrapping="Wrap"/>
+                    </Grid>
                     <Grid Margin="0,10,0,0">
                       <Grid.ColumnDefinitions><ColumnDefinition Width="92"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                       <Grid.RowDefinitions><RowDefinition Height="22"/><RowDefinition Height="22"/></Grid.RowDefinitions>
@@ -1000,12 +1001,13 @@ $xaml = @'
                           AutomationProperties.Name="BitLocker recovery key record"/>
                 <Border Background="#F8FAFC" BorderBrush="#E2E8F0" BorderThickness="1" CornerRadius="9" Padding="13" Margin="0,9,0,0">
                   <StackPanel>
-                    <TextBlock x:Name="BitLockerVolumeText" Text="No recovery key" Foreground="#334155" FontSize="13" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="BitLockerVolumeText" Text="No recovery key" Foreground="#334155" FontSize="13" FontWeight="SemiBold" TextWrapping="Wrap"/>
                     <TextBlock x:Name="BitLockerKeyText" Text="••••••-••••••-••••••-••••••-••••••-••••••-••••••-••••••" FontFamily="Cascadia Mono, Consolas" FontSize="13" FontWeight="SemiBold" Foreground="#0F172A" Margin="0,10,0,0" TextWrapping="Wrap" LineHeight="19"/>
-                    <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
-                      <Ellipse x:Name="BitLockerStatusDot" Width="6" Height="6" Fill="#94A3B8" Margin="0,0,6,0" VerticalAlignment="Center"/>
-                      <TextBlock x:Name="BitLockerCountdownText" Text="Recovery key remains hidden until requested" Foreground="#64748B" FontSize="10.5" TextWrapping="Wrap"/>
-                    </StackPanel>
+                    <Grid Margin="0,6,0,0">
+                      <Grid.ColumnDefinitions><ColumnDefinition Width="12"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                      <Ellipse x:Name="BitLockerStatusDot" Width="6" Height="6" Fill="#94A3B8" Margin="0,4,6,0" VerticalAlignment="Top"/>
+                      <TextBlock x:Name="BitLockerCountdownText" Grid.Column="1" Text="Recovery key remains hidden until requested" Foreground="#64748B" FontSize="10.5" TextWrapping="Wrap"/>
+                    </Grid>
                     <Grid Margin="0,9,0,0">
                       <Grid.ColumnDefinitions><ColumnDefinition Width="92"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                       <TextBlock Text="Backed up" Foreground="#64748B" FontSize="10.5" VerticalAlignment="Center"/>
@@ -1985,8 +1987,8 @@ function Start-GraphOperation {
 
 function Restore-SecretActionControls {
     $selected = Get-SelectedDevice
-    $lapsAvailable = $null -ne $selected -and [bool]$selected.LapsAvailable
-    $bitLockerAvailable = $null -ne $selected -and [bool]$selected.BitLockerAvailable -and $null -ne $BitLockerKeySelector.SelectedItem
+    $lapsAvailable = $script:IsSignedIn -and $null -ne $selected -and [bool]$selected.LapsAvailable
+    $bitLockerAvailable = $script:IsSignedIn -and $null -ne $selected -and [bool]$selected.BitLockerAvailable -and $null -ne $BitLockerKeySelector.SelectedItem
     $CopyPasswordButton.IsEnabled = $lapsAvailable
     $RevealPasswordButton.IsEnabled = $lapsAvailable
     $CopyPasswordButtonText.Text = 'Copy password'
@@ -2675,7 +2677,22 @@ function Refresh-DeviceFilter {
     if ($script:InventoryCounts.EntraOnly -eq 0 -and $EntraOnlyCheckBox.IsChecked -eq $true) {
         $EntraOnlyCheckBox.IsChecked = $false
     }
-    $script:DeviceView.Refresh()
+    # Snapshot controls once per refresh, not once for every inventory row.
+    $script:FilterQuery = $SearchBox.Text.Trim().ToLowerInvariant()
+    $script:FilterReadyOnly = $OnlyReadyCheckBox.IsChecked -eq $true
+    $script:FilterEntraOnly = $EntraOnlyCheckBox.IsChecked -eq $true
+    if ($null -eq $script:DeviceView.Filter) {
+        $script:DeviceView.Filter = [Predicate[object]]{
+            param($item)
+            if ($null -eq $item) { return $false }
+            return (-not $script:FilterReadyOnly -or [bool]$item.RecoveryAvailable) -and
+                (-not $script:FilterEntraOnly -or [bool]$item.IsEntraOnly) -and
+                ($script:FilterQuery.Length -eq 0 -or ([string]$item.SearchText).Contains($script:FilterQuery))
+        }
+    }
+    else {
+        $script:DeviceView.Refresh()
+    }
     Update-FilteredCount
     if ($script:DeviceView.IsEmpty) {
         $DeviceGrid.SelectedItem = $null
@@ -2688,44 +2705,35 @@ function Refresh-DeviceFilter {
 }
 
 function Set-DeviceInventory {
-    param([Parameter(Mandatory)][object[]]$Devices)
+    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Devices)
 
     $previousSelection = Get-SelectedDevice
     $previousDeviceId = if ($null -eq $previousSelection) { $null } else { [string]$previousSelection.EntraDeviceId }
     $script:AllDevices = @($Devices)
-    $script:InventoryCounts = @{
-        Laps = @($Devices | Where-Object LapsAvailable).Count
-        BitLocker = @($Devices | Where-Object BitLockerAvailable).Count
-        EntraOnly = @($Devices | Where-Object IsEntraOnly).Count
-    }
+    $script:InventoryCounts = @{ Laps=0; BitLocker=0; EntraOnly=0 }
     $collection = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
     foreach ($device in $script:AllDevices) {
         $collection.Add($device)
+        if ($device.LapsAvailable) { $script:InventoryCounts.Laps++ }
+        if ($device.BitLockerAvailable) { $script:InventoryCounts.BitLocker++ }
+        if ($device.IsEntraOnly) { $script:InventoryCounts.EntraOnly++ }
     }
 
     $DeviceGrid.ItemsSource = $collection
     $script:DeviceView = [System.Windows.Data.CollectionViewSource]::GetDefaultView($collection)
-    $script:DeviceView.Filter = [Predicate[object]]{
-        param($item)
-        if ($null -eq $item) { return $false }
-        $query = $SearchBox.Text.Trim().ToLowerInvariant()
-        $matchesSearch = [string]::IsNullOrWhiteSpace($query) -or ([string]$item.SearchText).Contains($query)
-        $matchesReady = $OnlyReadyCheckBox.IsChecked -ne $true -or [bool]$item.RecoveryAvailable
-        $matchesManagement = $EntraOnlyCheckBox.IsChecked -ne $true -or [bool]$item.IsEntraOnly
-        return $matchesSearch -and $matchesReady -and $matchesManagement
-    }
-
     Refresh-DeviceFilter
-    $visible = @($script:DeviceView)
-    if ($visible.Count -gt 0) {
+    if (-not $script:DeviceView.IsEmpty) {
         $selection = $null
         if (-not [string]::IsNullOrWhiteSpace($previousDeviceId)) {
-            $selection = $visible | Where-Object {
-                [string]::Equals([string]$_.EntraDeviceId, $previousDeviceId, [StringComparison]::OrdinalIgnoreCase)
-            } | Select-Object -First 1
+            foreach ($candidate in $script:DeviceView) {
+                if ([string]::Equals([string]$candidate.EntraDeviceId, $previousDeviceId, [StringComparison]::OrdinalIgnoreCase)) {
+                    $selection = $candidate
+                    break
+                }
+            }
         }
         if ($null -eq $selection) {
-            $selection = $visible[0]
+            $selection = $script:DeviceView.GetItemAt(0)
         }
         $DeviceGrid.SelectedItem = $selection
         $DeviceGrid.ScrollIntoView($DeviceGrid.SelectedItem)
@@ -2832,7 +2840,7 @@ function Invoke-CredentialAction {
 
     if ($null -ne $script:CurrentCredential -and
         [string]::Equals($script:CurrentCredentialDeviceId, [string]$selected.EntraDeviceId, [StringComparison]::OrdinalIgnoreCase) -and
-        [DateTimeOffset]::Now -lt $script:CredentialExpiresAt) {
+        (Get-SensitiveClockNow) -lt $script:CredentialExpiresAt) {
         Complete-CredentialAction -Action $Action -Credential $script:CurrentCredential
         return
     }
@@ -2946,7 +2954,7 @@ function Invoke-BitLockerAction {
     if ($null -ne $script:CurrentBitLockerKey -and
         [string]::Equals($script:CurrentBitLockerDeviceId, [string]$selected.EntraDeviceId, [StringComparison]::OrdinalIgnoreCase) -and
         [string]::Equals($script:CurrentBitLockerKeyId, [string]$selectedKey.Id, [StringComparison]::OrdinalIgnoreCase) -and
-        [DateTimeOffset]::Now -lt $script:BitLockerExpiresAt) {
+        (Get-SensitiveClockNow) -lt $script:BitLockerExpiresAt) {
         Complete-BitLockerAction -Action $Action -KeyResult $script:CurrentBitLockerKey
         return
     }
@@ -3055,8 +3063,13 @@ function Complete-GraphOperation {
             $script:LastDeviceCode = $null
             $script:SignInPageOpenedForCode = $null
             $AuthOverlay.Visibility = 'Collapsed'
-            Set-AuthenticationDisplay -SignedIn $false -Text 'Sign-in required'
             $script:AuthenticationVerificationGeneration = $null
+        }
+        if ($operationName -eq 'Authenticate' -or $statusCode -eq 401) {
+            Clear-SecretVerificationState
+            Clear-SecretDisplay
+            Set-AuthenticationDisplay -SignedIn $false -Text 'Sign-in required'
+            Restore-SecretActionControls
         }
         if ($operationName -eq 'Credential') {
             $failedRecoveryKind = 'LAPS'
@@ -3537,6 +3550,17 @@ $window.Add_Loaded({
             $CancelVerificationButton.Visibility = 'Visible'
             $AuthOverlay.Visibility = 'Visible'
             Set-AppStatus -Message 'Waiting for Microsoft verification...' -Busy
+        }
+        elseif ($RenderPreviewState -in @('LapsClipboard','BitLockerClipboard')) {
+            $previewTab = if ($RenderPreviewState -eq 'LapsClipboard') { 'LAPS' } else { 'BitLocker' }
+            Set-RecoveryTab -Tab $previewTab
+            $AccountNameText.Text = 'DemoLocalAdmin'
+            # Preview state only: no secret retrieval or real clipboard write.
+            $script:ClipboardDeviceId = [string]$DeviceGrid.SelectedItem.EntraDeviceId
+            $script:ClipboardKind = $previewTab
+            $script:ClipboardRecoveryKeyId = if ($previewTab -eq 'BitLocker') { [string]$BitLockerKeySelector.SelectedItem.Id } else { $null }
+            $script:ClipboardClearAt = (Get-SensitiveClockNow).AddSeconds(45)
+            $null = Update-ClipboardStatusForSelection
         }
         elseif ($DemoMode) {
             Set-RecoveryTab -Tab 'BitLocker'
