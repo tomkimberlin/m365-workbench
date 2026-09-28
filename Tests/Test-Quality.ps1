@@ -60,7 +60,8 @@
                 $copy=$qualityWindow.FindName('CopyRecoveryKeyButton')
                 $panel=$qualityWindow.FindName('DetailPanel')
                 $bottom=$copy.TranslatePoint([System.Windows.Point]::new(0,$copy.ActualHeight),$panel).Y
-                Assert-True -Condition ($bottom -le $panel.ActualHeight) -Name "BitLocker Copy stays fully visible at the default size with a key ID and $volume"
+                $volumeText=$qualityWindow.FindName('BitLockerVolumeText')
+                Assert-True -Condition ($bottom -le $panel.ActualHeight -and $volumeText.TextWrapping -eq 'NoWrap' -and $volumeText.ToolTip -eq $volume) -Name "BitLocker Copy stays fully visible at the default size with a key ID and $volume (button bottom $bottom; viewport $($panel.ActualHeight))"
             }
         }
         $qualityWindow.Close()

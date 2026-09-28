@@ -1005,7 +1005,7 @@ $xaml = @'
                   <StackPanel>
                     <Grid>
                       <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                      <TextBlock x:Name="BitLockerVolumeText" Text="No recovery key" Foreground="#334155" FontSize="13" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                      <TextBlock x:Name="BitLockerVolumeText" Text="No recovery key" Foreground="#334155" FontSize="13" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
                       <TextBlock x:Name="BitLockerKeyIdText" Grid.Column="1" Foreground="#64748B" FontSize="10" FontFamily="Cascadia Mono, Consolas" Margin="8,0,0,0" VerticalAlignment="Center"/>
                     </Grid>
                     <TextBlock x:Name="BitLockerKeyText" Text="••••••-••••••-••••••-••••••-••••••-••••••-••••••-••••••" FontFamily="Cascadia Mono, Consolas" FontSize="13" FontWeight="SemiBold" Foreground="#0F172A" Margin="0,10,0,0" TextWrapping="Wrap" LineHeight="19"/>
