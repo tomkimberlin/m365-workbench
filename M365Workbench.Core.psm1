@@ -755,6 +755,24 @@ function Get-FriendlyLapsErrorMessage {
     )
 
     $combined = "$ErrorCode $Message"
+    if ($ErrorCode -eq 'WorkerStartFailed') {
+        return 'The local background worker could not start. Retry the action; if it happens again, close and reopen Workbench.'
+    }
+    switch ($ErrorCode) {
+        'WrongAccount' { return 'Microsoft sign-in used a different account. Reconnect using the configured administrator account.' }
+        'WrongTenant' { return 'Microsoft sign-in used a different tenant. Reconnect to the configured tenant.' }
+        'MissingScopes' { return 'Microsoft sign-in is missing required Graph permissions. Check administrator consent, then reconnect.' }
+        'NotDelegated' { return 'This workspace requires a delegated administrator sign-in. Reconnect using the configured account.' }
+    }
+    # Status is authoritative; incidental words such as "token" must not turn a
+    # service outage or access denial into misleading expired-sign-in guidance.
+    if ($StatusCode -ge 500 -and $StatusCode -le 599) {
+        return 'Microsoft Graph is temporarily unavailable. Wait a moment and retry.'
+    }
+    if ($StatusCode -eq 408) {
+        return 'The Microsoft Graph request timed out. Check the network connection and retry.'
+    }
+    if ($StatusCode -ge 100 -and $StatusCode -le 599) { $combined = '' }
     if ($StatusCode -eq 401 -or $combined -match '(?i)authentication|token|sign.?in') {
         return 'Your Microsoft Graph sign-in has expired. Sign in again and retry.'
     }
@@ -769,6 +787,9 @@ function Get-FriendlyLapsErrorMessage {
     }
     if ($combined -match '(?i)consent') {
         return "Administrator consent is required for this tool's Microsoft Graph permissions."
+    }
+    if ($combined -match '(?i)timed?\s*out|timeout|taskcanceled|operationcanceled') {
+        return 'The Microsoft Graph request timed out. Check the network connection and retry.'
     }
     if ($combined -match '(?i)password.?payload|decoded.?safely|passworddecodefailed') {
         return 'Microsoft Graph returned a LAPS password payload that this utility could not decode safely. Close and reopen the updated utility, then retry.'

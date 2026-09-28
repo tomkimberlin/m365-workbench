@@ -2,7 +2,7 @@
 # fictional metadata only. No window, authentication, or tenant connection is used.
 & {
     Add-Type -AssemblyName PresentationFramework
-    foreach ($functionName in @('Update-FilteredCount', 'Refresh-DeviceFilter', 'Set-DeviceInventory')) {
+    foreach ($functionName in @('Update-FilteredCount', 'Refresh-DeviceFilter', 'Set-DeviceInventory','Get-InventorySelectionId')) {
         $functionAst = $mainAst.Find({ param($node)
             $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $functionName
         }, $true)
@@ -12,6 +12,7 @@
     function Update-DetailPanel { }
     $DeviceGrid = [System.Windows.Controls.DataGrid]::new()
     $DeviceGrid.CanUserAddRows = $false
+    $BitLockerKeySelector = [System.Windows.Controls.ComboBox]::new()
     $SearchBox = [System.Windows.Controls.TextBox]::new()
     $OnlyReadyCheckBox = [System.Windows.Controls.CheckBox]::new()
     $EntraOnlyCheckBox = [System.Windows.Controls.CheckBox]::new()
@@ -53,6 +54,43 @@
     $SearchBox.Clear()
     Set-DeviceInventory -Devices @($managed)
     Assert-True -Condition ($script:DeviceView.Count -eq 1 -and $DeviceGrid.SelectedItem -eq $managed -and $EmptyState.Visibility -eq 'Collapsed') -Name 'A later successful inventory recovers from the empty state'
+
+    $column = [System.Windows.Controls.DataGridTextColumn]::new()
+    $column.SortMemberPath = 'SearchText'
+    $DeviceGrid.Columns.Add($column)
+    Set-DeviceInventory @($managed, $entra)
+    $script:DeviceView.SortDescriptions.Add([System.ComponentModel.SortDescription]::new('SearchText','Descending'))
+    $column.SortDirection = 'Descending'
+    Set-DeviceInventory @($managed, $entra)
+    Assert-True -Condition ($script:DeviceView.SortDescriptions.Count -eq 1 -and $script:DeviceView.GetItemAt(0) -eq $entra -and $column.SortDirection -eq 'Descending') -Name 'Refresh preserves the chosen sort order and its column arrow'
+    Set-DeviceInventory @()
+    Set-DeviceInventory @($managed, $entra)
+    Assert-True -Condition ($script:DeviceView.GetItemAt(0) -eq $entra -and $script:DeviceView.SortDescriptions.Count -eq 1) -Name 'Sorting survives an empty inventory followed by a successful refresh'
+    $script:DeviceView.SortDescriptions.Clear()
+
+    Set-DeviceInventory @($managed,$entra)
+    $DeviceGrid.SelectedItem=$managed
+    $keysFixture=@([pscustomobject]@{Id='aaaaaaaa-1111-4111-8111-111111111111'},[pscustomobject]@{Id='bbbbbbbb-2222-4222-8222-222222222222'})
+    $BitLockerKeySelector.ItemsSource=$keysFixture
+    $BitLockerKeySelector.SelectedIndex=1
+    $selectionHandler=[System.Windows.Controls.SelectionChangedEventHandler]{
+        $BitLockerKeySelector.ItemsSource=@($keysFixture | ForEach-Object { [pscustomobject]@{Id=$_.Id} })
+        $BitLockerKeySelector.SelectedIndex=0
+    }
+    $DeviceGrid.Add_SelectionChanged($selectionHandler)
+    Set-DeviceInventory @($managed,$entra)
+    Assert-True -Condition ($BitLockerKeySelector.SelectedItem.Id -eq $keysFixture[1].Id) -Name 'Refresh preserves the selected recovery-key record when it remains available for the same device'
+    $DeviceGrid.Remove_SelectionChanged($selectionHandler)
+    $BitLockerKeySelector.ItemsSource=$null
+
+    $pendingA=[pscustomobject]@{EntraDeviceId='00000000-0000-0000-0000-000000000000';IntuneDeviceId='aaaaaaaa-1111-4111-8111-111111111111';SearchText='demo-device-pending-a';IsEntraOnly=$false;RecoveryAvailable=$false;LapsAvailable=$false;BitLockerAvailable=$false}
+    $pendingB=[pscustomobject]@{EntraDeviceId='00000000-0000-0000-0000-000000000000';IntuneDeviceId='bbbbbbbb-2222-4222-8222-222222222222';SearchText='demo-device-pending-b';IsEntraOnly=$false;RecoveryAvailable=$false;LapsAvailable=$false;BitLockerAvailable=$false}
+    $OnlyReadyCheckBox.IsChecked=$false
+    Set-DeviceInventory @($pendingA,$pendingB)
+    $DeviceGrid.SelectedItem=$pendingB
+    Set-DeviceInventory @($pendingA,$pendingB)
+    Assert-True -Condition ($DeviceGrid.SelectedItem -eq $pendingB) -Name 'Selection uses the Intune ID when multiple devices have no valid Entra ID'
+    $OnlyReadyCheckBox.IsChecked=$true
 
     # Measure representative inventory work without a machine-dependent time assertion.
     $SearchBox.Clear()

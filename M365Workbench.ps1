@@ -3,7 +3,7 @@ param(
     [switch]$DemoMode,
     [switch]$NoAutoConnect,
     [string]$RenderPreviewPath,
-    [ValidateSet('Workspace', 'MicrosoftVerification', 'LapsClipboard', 'BitLockerClipboard')]
+    [ValidateSet('Workspace', 'MicrosoftVerification', 'LapsClipboard', 'BitLockerClipboard', 'InventoryRefreshing')]
     [string]$RenderPreviewState = 'Workspace'
 )
 
@@ -117,7 +117,7 @@ if ([Threading.Thread]::CurrentThread.GetApartmentState() -ne [Threading.Apartme
 $xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="M365 Workbench · 2026.09.22"
+        Title="M365 Workbench · 2026.09.28"
         Width="1280" Height="780" MinWidth="1100" MinHeight="680"
         WindowStartupLocation="CenterScreen"
         Background="#F5F7FB"
@@ -276,6 +276,7 @@ $xaml = @'
     </Style>
 
     <Style x:Key="RecoveryKeyPickerItem" TargetType="{x:Type ComboBoxItem}">
+      <Setter Property="ToolTip" Value="{Binding Id}"/>
       <Setter Property="Background" Value="Transparent"/>
       <Setter Property="Foreground" Value="#172033"/>
       <Setter Property="Padding" Value="10,6"/>
@@ -643,7 +644,7 @@ $xaml = @'
       </Border>
       <Button x:Name="RefreshButton" Grid.Column="4" Style="{StaticResource SecondaryButton}" MinWidth="108" Height="50" ToolTip="Refresh devices (F5)">
         <StackPanel Orientation="Horizontal">
-          <TextBlock Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" FontSize="14" Margin="0,0,7,0" VerticalAlignment="Center"/>
+          <TextBlock x:Name="RefreshIcon" Text="&#xE72C;" FontFamily="Segoe MDL2 Assets" FontSize="14" Margin="0,0,7,0" VerticalAlignment="Center"/>
           <TextBlock x:Name="RefreshButtonText" Text="Refresh" VerticalAlignment="Center"/>
         </StackPanel>
       </Button>
@@ -995,13 +996,18 @@ $xaml = @'
                 <TextBlock Text="RECOVERY KEY" Foreground="#64748B" FontSize="9.5" FontWeight="Bold" Margin="0,11,0,6"/>
                 <ComboBox x:Name="BitLockerKeySelector"
                           Style="{StaticResource RecoveryKeyPicker}"
+                          TextSearch.TextPath="Id"
                           MaxDropDownHeight="232"
                           IsEnabled="False"
                           ToolTip="Choose a BitLocker recovery-key record"
                           AutomationProperties.Name="BitLocker recovery key record"/>
                 <Border Background="#F8FAFC" BorderBrush="#E2E8F0" BorderThickness="1" CornerRadius="9" Padding="13" Margin="0,9,0,0">
                   <StackPanel>
-                    <TextBlock x:Name="BitLockerVolumeText" Text="No recovery key" Foreground="#334155" FontSize="13" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                    <Grid>
+                      <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                      <TextBlock x:Name="BitLockerVolumeText" Text="No recovery key" Foreground="#334155" FontSize="13" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                      <TextBlock x:Name="BitLockerKeyIdText" Grid.Column="1" Foreground="#64748B" FontSize="10" FontFamily="Cascadia Mono, Consolas" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                    </Grid>
                     <TextBlock x:Name="BitLockerKeyText" Text="••••••-••••••-••••••-••••••-••••••-••••••-••••••-••••••" FontFamily="Cascadia Mono, Consolas" FontSize="13" FontWeight="SemiBold" Foreground="#0F172A" Margin="0,10,0,0" TextWrapping="Wrap" LineHeight="19"/>
                     <Grid Margin="0,6,0,0">
                       <Grid.ColumnDefinitions><ColumnDefinition Width="12"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
@@ -1072,11 +1078,12 @@ $xaml = @'
     <Border Grid.Row="3" Background="White" BorderBrush="#E4E9F0" BorderThickness="0,1,0,0">
       <Grid Margin="24,0">
         <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+        <Grid VerticalAlignment="Center" Margin="0,0,12,0">
+          <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
           <TextBlock Text="&#xE72E;" FontFamily="Segoe MDL2 Assets" FontSize="11" Foreground="#64748B" Margin="0,0,8,0" VerticalAlignment="Center"/>
-          <ProgressBar x:Name="BusyIndicator" Width="64" Height="3" IsIndeterminate="True" Foreground="{StaticResource PrimaryBrush}" Visibility="Collapsed" Margin="0,0,10,0"/>
-          <TextBlock x:Name="FooterStatusText" Text="Starting..." Foreground="#64748B" FontSize="12" VerticalAlignment="Center" AutomationProperties.Name="Application status" AutomationProperties.LiveSetting="Polite"/>
-        </StackPanel>
+          <ProgressBar x:Name="BusyIndicator" Grid.Column="1" Width="64" Height="3" IsIndeterminate="True" Foreground="{StaticResource PrimaryBrush}" Visibility="Collapsed" Margin="0,0,10,0"/>
+          <TextBlock x:Name="FooterStatusText" Grid.Column="2" Text="Starting..." Foreground="#64748B" FontSize="12" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}" AutomationProperties.Name="Application status" AutomationProperties.LiveSetting="Polite"/>
+        </Grid>
         <TextBlock x:Name="DeviceCountText" Grid.Column="1" Foreground="#64748B" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center"/>
       </Grid>
     </Border>
@@ -1152,7 +1159,7 @@ $windowHandle = [System.Windows.Interop.WindowInteropHelper]::new($window).Ensur
 
 $controlNames = @(
     'AuthDot', 'AuthStatusText', 'SignInButton', 'SearchBox', 'SearchHint', 'ClearSearchButton',
-    'EntraOnlyFilterContainer', 'EntraOnlyCheckBox', 'EntraOnlyFilterCount', 'OnlyReadyCheckBox', 'RefreshButton', 'RefreshButtonText', 'DeviceTableSurface', 'DeviceGrid', 'EmptyState',
+    'EntraOnlyFilterContainer', 'EntraOnlyCheckBox', 'EntraOnlyFilterCount', 'OnlyReadyCheckBox', 'RefreshButton', 'RefreshButtonText', 'RefreshIcon', 'DeviceTableSurface', 'DeviceGrid', 'EmptyState',
     'EmptyStateTitle', 'EmptyStateDescription',
     'LoadingOverlay', 'LoadingText', 'NoSelectionPanel', 'DetailPanel', 'DetailDeviceName',
     'DetailPrimaryUser', 'DetailUserPrincipalName', 'DetailLapsBadge', 'DetailLapsDot', 'DetailBitLockerBadge', 'OpenIntuneButton', 'OpenEntraButton', 'EntraOnlyNotice',
@@ -1160,7 +1167,7 @@ $controlNames = @(
     'BitLockerRecoveryPanel', 'AccountNameText', 'PasswordText',
     'PasswordStatusDot', 'PasswordCountdownText', 'CopyPasswordButton', 'CopyPasswordButtonText',
     'RevealPasswordButton', 'CopyAccountButton', 'DetailLapsStatus', 'DetailModel', 'DetailLastSync',
-    'DetailBackupDate', 'DetailRefreshDate', 'BitLockerKeySelector', 'BitLockerVolumeText', 'BitLockerKeyText',
+    'DetailBackupDate', 'DetailRefreshDate', 'BitLockerKeySelector', 'BitLockerVolumeText', 'BitLockerKeyIdText', 'BitLockerKeyText',
     'BitLockerStatusDot', 'BitLockerCountdownText', 'BitLockerCreatedText', 'CopyRecoveryKeyButton',
     'CopyRecoveryKeyButtonText', 'RevealRecoveryKeyButton', 'DetailSerial', 'DetailOperatingSystem',
     'DetailEntraActivity', 'DetailEncrypted', 'DetailOwnership', 'DetailJoinType', 'DetailComplianceDot',
@@ -1199,6 +1206,7 @@ $script:PendingBitLockerAction = $null
 $script:PendingCredentialVerificationGeneration = $null
 $script:PendingBitLockerVerificationGeneration = $null
 $script:PendingSecretRequest = $null
+$script:RecoveryRequestCanceled = $false
 $script:LocalVerificationTask = $null
 $script:LocalVerificationCancellation = $null
 $script:MicrosoftVerificationCancelEvent = $null
@@ -1937,13 +1945,24 @@ function Initialize-GraphWorker {
         return
     }
 
-    $initialState = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
-    $script:GraphRunspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace($initialState)
-    $script:GraphRunspace.ApartmentState = [Threading.ApartmentState]::MTA
-    $script:GraphRunspace.ThreadOptions = [System.Management.Automation.Runspaces.PSThreadOptions]::ReuseThread
-    $script:GraphRunspace.Open()
-    $script:GraphPowerShell = [PowerShell]::Create()
-    $script:GraphPowerShell.Runspace = $script:GraphRunspace
+    $runspace = $null
+    $pipeline = $null
+    try {
+        $initialState = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
+        $runspace = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace($initialState)
+        $runspace.ApartmentState = [Threading.ApartmentState]::MTA
+        $runspace.ThreadOptions = [System.Management.Automation.Runspaces.PSThreadOptions]::ReuseThread
+        $runspace.Open()
+        $pipeline = [PowerShell]::Create()
+        $pipeline.Runspace = $runspace
+        $script:GraphRunspace = $runspace
+        $script:GraphPowerShell = $pipeline
+    }
+    catch {
+        if ($null -ne $pipeline) { $pipeline.Dispose() }
+        if ($null -ne $runspace) { $runspace.Dispose() }
+        throw
+    }
 }
 
 function Start-GraphOperation {
@@ -1957,32 +1976,85 @@ function Start-GraphOperation {
         return $false
     }
 
-    Initialize-GraphWorker
-    $script:GraphPowerShell.Commands.Clear()
-    $script:GraphPowerShell.Streams.Error.Clear()
-    $script:GraphPowerShell.Streams.Warning.Clear()
-    $script:GraphPowerShell.Streams.Information.Clear()
-    $script:GraphPowerShell.Streams.Verbose.Clear()
-    $script:GraphPowerShell.Streams.Debug.Clear()
-
-    $null = $script:GraphPowerShell.AddScript($ScriptText)
-    foreach ($argument in $Arguments) {
-        $null = $script:GraphPowerShell.AddArgument($argument)
-    }
-
     $inputCollection = [System.Management.Automation.PSDataCollection[psobject]]::new()
     $outputCollection = [System.Management.Automation.PSDataCollection[psobject]]::new()
-    $asyncResult = $script:GraphPowerShell.BeginInvoke[psobject, psobject]($inputCollection, $outputCollection)
     $inputCollection.Complete()
-
-    $script:CurrentOperation = [pscustomobject]@{
+    $operation = [pscustomobject]@{
         Name = $Name
-        AsyncResult = $asyncResult
+        AsyncResult = $null
         Input = $inputCollection
         Output = $outputCollection
         OutputIndex = 0
+        CancellationRequested = $false
+        StopAsyncResult = $null
     }
+    try {
+        Initialize-GraphWorker
+        $script:GraphPowerShell.Commands.Clear()
+        $script:GraphPowerShell.Streams.ClearStreams()
+        $null = $script:GraphPowerShell.AddScript($ScriptText)
+        foreach ($argument in $Arguments) { $null = $script:GraphPowerShell.AddArgument($argument) }
+        $operation.AsyncResult = $script:GraphPowerShell.BeginInvoke[psobject, psobject]($inputCollection, $outputCollection)
+    }
+    catch {
+        # Deliver startup failures through normal completion so controls recover.
+        # Do not retain raw exceptions, which may carry request/session data.
+        if ($null -ne $script:GraphPowerShell) { try { $script:GraphPowerShell.Dispose() } catch { } }
+        if ($null -ne $script:GraphRunspace) { try { $script:GraphRunspace.Dispose() } catch { } }
+        $script:GraphPowerShell = $null
+        $script:GraphRunspace = $null
+        $outputCollection.Add([pscustomobject]@{ Kind='Error'; ErrorCode='WorkerStartFailed'; Message='The local background worker could not start.'; StatusCode=$null })
+    }
+    $script:CurrentOperation = $operation
     return $true
+}
+
+function Stop-InventoryLoad {
+    $operation = $script:CurrentOperation
+    if ($null -eq $operation -or $operation.Name -ne 'Inventory' -or $operation.CancellationRequested) { return }
+    try {
+        if ($null -ne $operation.AsyncResult -and -not $operation.AsyncResult.IsCompleted) {
+            # A null callback keeps all PowerShell/UI callbacks on the UI thread.
+            $operation.StopAsyncResult = $script:GraphPowerShell.BeginStop($null, $null)
+        }
+        $operation.CancellationRequested = $true
+        $RefreshButton.IsEnabled = $false
+        $RefreshButtonText.Text = 'Canceling…'
+        Set-AppStatus -Message 'Canceling refresh; waiting for the current request to stop…' -Busy
+    }
+    catch {
+        Show-Toast -Message 'The refresh could not be canceled yet. Try again in a moment.' -Kind Error
+    }
+}
+
+function Reset-InventoryControls {
+    $LoadingOverlay.Visibility = 'Collapsed'
+    $RefreshButtonText.Text = 'Refresh'
+    $RefreshIcon.Text = [string][char]0xE72C
+    $RefreshButton.ToolTip = 'Refresh devices (F5)'
+    Restore-SecretActionControls
+}
+
+function Cancel-PendingRecoveryAction {
+    $retrieving = $null -ne $script:CurrentOperation -and $script:CurrentOperation.Name -in @('Credential', 'BitLockerKey')
+    if ($null -eq $script:PendingSecretRequest -and -not $retrieving) { return }
+    $script:RecoveryRequestCanceled = $true
+    $script:PendingCredentialVerificationGeneration = $null
+    $script:PendingBitLockerVerificationGeneration = $null
+    if ($null -ne $script:LocalVerificationCancellation) { $script:LocalVerificationCancellation.Cancel() }
+    if ($null -ne $script:MicrosoftVerificationCancelEvent) { $null = $script:MicrosoftVerificationCancelEvent.Set() }
+}
+
+function Update-OperationControls {
+    if ($null -ne $script:PendingSecretRequest) {
+        Set-SecretActionBusy -Kind ([string]$script:PendingSecretRequest.Kind)
+    }
+    elseif ($null -ne $script:CurrentOperation) {
+        Set-SecretActionBusy -Kind LAPS
+        if ($script:CurrentOperation.Name -eq 'Inventory') {
+            $RefreshButton.IsEnabled = -not $script:CurrentOperation.CancellationRequested
+        }
+    }
 }
 
 function Restore-SecretActionControls {
@@ -2304,6 +2376,10 @@ function Complete-LocalSecretVerification {
         Clear-PendingSecretRequest
         return
     }
+    if ($script:RecoveryRequestCanceled) {
+        Fail-SecretVerification -Message 'Recovery action canceled. No recovery data was accessed.' -Canceled
+        return
+    }
     $expectedGeneration = [int]$script:PendingSecretRequest.VerificationGeneration
     $verificationSnapshot = Get-SecretVerificationSnapshot
     if ($expectedGeneration -ne [int]$verificationSnapshot.Generation) {
@@ -2377,7 +2453,7 @@ function Request-SecretAction {
         [Parameter(Mandatory)][ValidateSet('Copy', 'Reveal')][string]$Action
     )
 
-    if ($null -ne $script:PendingSecretRequest -or $null -ne $script:LocalVerificationTask -or $null -ne $script:CurrentOperation) {
+    if (-not $script:IsSignedIn -or $null -ne $script:PendingSecretRequest -or $null -ne $script:LocalVerificationTask -or $null -ne $script:CurrentOperation) {
         return
     }
 
@@ -2391,6 +2467,7 @@ function Request-SecretAction {
     }
 
     $verificationSnapshot = Get-SecretVerificationSnapshot
+    $script:RecoveryRequestCanceled = $false
     $script:PendingSecretRequest = [pscustomobject]@{
         Kind          = $Kind
         Action        = $Action
@@ -2454,14 +2531,21 @@ function Start-InventoryLoad {
         return
     }
 
+    Set-InventoryLoadingState
+    $null = Start-GraphOperation -Name 'Inventory' -ScriptText $inventoryOperationScript -Arguments @($coreModulePath)
+}
+
+function Set-InventoryLoadingState {
     Set-AppStatus -Message 'Loading devices and recovery status...' -Busy
-    $RefreshButtonText.Text = 'Refreshing...'
-    $RefreshButton.IsEnabled = $false
+    Set-SecretActionBusy -Kind LAPS
+    $RefreshButtonText.Text = 'Cancel'
+    $RefreshIcon.Text = [string][char]0xE711
+    $RefreshButton.ToolTip = 'Cancel the current refresh; keep the previous inventory'
+    $RefreshButton.IsEnabled = $true
     if ($script:AllDevices.Count -eq 0) {
         $LoadingText.Text = 'Loading managed devices...'
         $LoadingOverlay.Visibility = 'Visible'
     }
-    $null = Start-GraphOperation -Name 'Inventory' -ScriptText $inventoryOperationScript -Arguments @($coreModulePath)
 }
 
 function Get-SelectedDevice {
@@ -2472,6 +2556,7 @@ function Set-RecoveryTab {
     param([Parameter(Mandatory)][ValidateSet('LAPS', 'BitLocker')][string]$Tab)
 
     if ($script:ActiveRecoveryTab -ne $Tab) {
+        Cancel-PendingRecoveryAction
         Clear-SecretDisplay
     }
     $script:ActiveRecoveryTab = $Tab
@@ -2491,6 +2576,8 @@ function Update-BitLockerSelection {
     $selectedKey = $BitLockerKeySelector.SelectedItem
     if ($null -eq $selected -or $null -eq $selectedKey) {
         $BitLockerVolumeText.Text = 'No recovery key backed up'
+        $BitLockerKeyIdText.Text = ''
+        $BitLockerKeyIdText.ToolTip = $null
         $BitLockerCreatedText.Text = [string][char]0x2014
         $CopyRecoveryKeyButton.IsEnabled = $false
         $RevealRecoveryKeyButton.IsEnabled = $false
@@ -2498,17 +2585,15 @@ function Update-BitLockerSelection {
     }
 
     $BitLockerVolumeText.Text = [string]$selectedKey.VolumeDisplay
+    $keyId = ([string]$selectedKey.Id).ToUpperInvariant()
+    $BitLockerKeyIdText.Text = 'ID ' + $keyId.Substring(0, [Math]::Min(8, $keyId.Length))
+    $BitLockerKeyIdText.ToolTip = 'Recovery key ID: ' + $keyId
     $BitLockerCreatedText.Text = [string]$selectedKey.CreatedDisplay
     $canRetrieve = [bool]$selected.BitLockerAvailable -and $script:IsSignedIn
     $CopyRecoveryKeyButton.IsEnabled = $canRetrieve
     $RevealRecoveryKeyButton.IsEnabled = $canRetrieve
     $null = Update-ClipboardStatusForSelection
-    if ($null -ne $script:PendingSecretRequest) {
-        Set-SecretActionBusy -Kind ([string]$script:PendingSecretRequest.Kind)
-    }
-    elseif ($null -ne $script:CurrentOperation -and $script:CurrentOperation.Name -in @('Credential', 'BitLockerKey')) {
-        Set-SecretActionBusy -Kind $(if ($script:CurrentOperation.Name -eq 'Credential') { 'LAPS' } else { 'BitLocker' })
-    }
+    Update-OperationControls
 }
 
 function Update-DetailPanel {
@@ -2624,12 +2709,7 @@ function Update-DetailPanel {
     }
     Set-RecoveryTab -Tab $targetTab
     $null = Update-ClipboardStatusForSelection
-    if ($null -ne $script:PendingSecretRequest) {
-        Set-SecretActionBusy -Kind ([string]$script:PendingSecretRequest.Kind)
-    }
-    elseif ($null -ne $script:CurrentOperation -and $script:CurrentOperation.Name -in @('Credential', 'BitLockerKey')) {
-        Set-SecretActionBusy -Kind $(if ($script:CurrentOperation.Name -eq 'Credential') { 'LAPS' } else { 'BitLocker' })
-    }
+    Update-OperationControls
 }
 
 function Update-FilteredCount {
@@ -2704,11 +2784,26 @@ function Refresh-DeviceFilter {
     }
 }
 
+function Get-InventorySelectionId {
+    param([AllowNull()][object]$Device)
+    if ($null -eq $Device) { return $null }
+    foreach ($field in @('EntraDeviceId', 'IntuneDeviceId')) {
+        $property = $Device.PSObject.Properties[$field]
+        $id = [Guid]::Empty
+        if ($null -ne $property -and [Guid]::TryParse([string]$property.Value, [ref]$id) -and $id -ne [Guid]::Empty) {
+            return "$field`:$($id.ToString('D'))"
+        }
+    }
+    return $null
+}
+
 function Set-DeviceInventory {
     param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Devices)
 
     $previousSelection = Get-SelectedDevice
-    $previousDeviceId = if ($null -eq $previousSelection) { $null } else { [string]$previousSelection.EntraDeviceId }
+    $previousDeviceId = Get-InventorySelectionId -Device $previousSelection
+    $previousKeyId = if ($null -eq $BitLockerKeySelector.SelectedItem) { $null } else { [string]$BitLockerKeySelector.SelectedItem.Id }
+    $sorts = @(if ($null -ne $script:DeviceView) { $script:DeviceView.SortDescriptions })
     $script:AllDevices = @($Devices)
     $script:InventoryCounts = @{ Laps=0; BitLocker=0; EntraOnly=0 }
     $collection = [System.Collections.ObjectModel.ObservableCollection[object]]::new()
@@ -2721,13 +2816,32 @@ function Set-DeviceInventory {
 
     $DeviceGrid.ItemsSource = $collection
     $script:DeviceView = [System.Windows.Data.CollectionViewSource]::GetDefaultView($collection)
+    if ($sorts.Count -gt 0) {
+        $defer = $script:DeviceView.DeferRefresh()
+        try { foreach ($sort in $sorts) { $script:DeviceView.SortDescriptions.Add($sort) } }
+        finally { $defer.Dispose() }
+        foreach ($column in $DeviceGrid.Columns) {
+            $sort = $sorts | Where-Object PropertyName -eq $column.SortMemberPath | Select-Object -First 1
+            $column.SortDirection = if ($null -eq $sort) { $null } else { $sort.Direction }
+        }
+    }
     Refresh-DeviceFilter
     if (-not $script:DeviceView.IsEmpty) {
         $selection = $null
+        $sameDevice = $false
         if (-not [string]::IsNullOrWhiteSpace($previousDeviceId)) {
+            $selectionField, $selectionValue = $previousDeviceId -split ':', 2
             foreach ($candidate in $script:DeviceView) {
-                if ([string]::Equals([string]$candidate.EntraDeviceId, $previousDeviceId, [StringComparison]::OrdinalIgnoreCase)) {
+                $property = $candidate.PSObject.Properties[$selectionField]
+                if ($null -eq $property) { continue }
+                $candidateId = [string]$property.Value
+                if ($candidateId.Length -ne 36) {
+                    $parsed = [Guid]::Empty
+                    if ([Guid]::TryParse($candidateId, [ref]$parsed)) { $candidateId = $parsed.ToString('D') }
+                }
+                if ([string]::Equals($candidateId, $selectionValue, [StringComparison]::OrdinalIgnoreCase)) {
                     $selection = $candidate
+                    $sameDevice = $true
                     break
                 }
             }
@@ -2736,6 +2850,14 @@ function Set-DeviceInventory {
             $selection = $script:DeviceView.GetItemAt(0)
         }
         $DeviceGrid.SelectedItem = $selection
+        if ($sameDevice -and -not [string]::IsNullOrWhiteSpace($previousKeyId)) {
+            foreach ($key in $BitLockerKeySelector.Items) {
+                if ([string]::Equals([string]$key.Id, $previousKeyId, [StringComparison]::OrdinalIgnoreCase)) {
+                    $BitLockerKeySelector.SelectedItem = $key
+                    break
+                }
+            }
+        }
         $DeviceGrid.ScrollIntoView($DeviceGrid.SelectedItem)
     }
     else {
@@ -2990,7 +3112,8 @@ function Complete-GraphOperation {
     param([Parameter(Mandatory)][object]$Operation)
 
     try {
-        $null = $script:GraphPowerShell.EndInvoke($Operation.AsyncResult)
+        if ($null -ne $Operation.StopAsyncResult) { $script:GraphPowerShell.EndStop($Operation.StopAsyncResult) }
+        if ($null -ne $Operation.AsyncResult) { $null = $script:GraphPowerShell.EndInvoke($Operation.AsyncResult) }
     }
     catch {
         # A sanitized error is produced below from the PowerShell error stream.
@@ -3003,10 +3126,37 @@ function Complete-GraphOperation {
     }
 
     $operationName = [string]$Operation.Name
+    $expectedKind = switch ($operationName) {
+        'Authenticate' { 'AuthResult' }
+        'Inventory' { 'InventoryResult' }
+        'Credential' { 'CredentialResult' }
+        'BitLockerKey' { 'BitLockerKeyResult' }
+        'MicrosoftVerification' { 'MicrosoftVerificationResult'; 'VerificationError'; 'VerificationCanceled' }
+    }
+    if ([string]$result.Kind -ne 'Error' -and [string]$result.Kind -notin @($expectedKind)) {
+        foreach ($field in @('Password','RecoveryKey')) {
+            $property = $result.PSObject.Properties[$field]
+            if ($null -ne $property) { $property.Value = $null }
+        }
+        $result = [pscustomobject]@{ Kind='Error'; ErrorCode='UnexpectedOperationResult'; Message='The background operation returned an unexpected result.'; StatusCode=$null }
+    }
+    if ($null -ne $script:GraphPowerShell) { $script:GraphPowerShell.Streams.ClearStreams() }
     $Operation.Output.Clear()
     $Operation.Input.Dispose()
     $Operation.Output.Dispose()
     $script:CurrentOperation = $null
+
+    if ($operationName -eq 'Inventory' -and $Operation.CancellationRequested) {
+        Reset-InventoryControls
+        Update-FilteredCount
+        if ($script:AllDevices.Count -eq 0) {
+            $EmptyStateTitle.Text = 'Refresh canceled'
+            $EmptyStateDescription.Text = 'Select Refresh to load computers.'
+            $EmptyState.Visibility = 'Visible'
+        }
+        Set-AppStatus -Message $(if ($script:AllDevices.Count -gt 0) { 'Refresh canceled — showing the previous inventory.' } else { 'Refresh canceled. Select Refresh to try again.' })
+        return
+    }
 
     if ($operationName -eq 'MicrosoftVerification') {
         Clear-AuthenticationClipboard
@@ -3015,6 +3165,10 @@ function Complete-GraphOperation {
         $AuthOverlay.Visibility = 'Collapsed'
         $CancelVerificationButton.Visibility = 'Collapsed'
         $CancelVerificationButton.IsEnabled = $true
+        if ($script:RecoveryRequestCanceled) {
+            Fail-SecretVerification -Message 'Recovery action canceled. No recovery data was accessed.' -Canceled
+            return
+        }
         switch ([string]$result.Kind) {
             'MicrosoftVerificationResult' {
                 if ($null -eq $script:PendingSecretRequest) {
@@ -3059,13 +3213,13 @@ function Complete-GraphOperation {
             $friendly = "$friendly Failed while loading $([string]$stageProperty.Value)."
         }
         if ($operationName -eq 'Authenticate') {
-            Clear-AuthenticationClipboard
             $script:LastDeviceCode = $null
             $script:SignInPageOpenedForCode = $null
             $AuthOverlay.Visibility = 'Collapsed'
             $script:AuthenticationVerificationGeneration = $null
         }
         if ($operationName -eq 'Authenticate' -or $statusCode -eq 401) {
+            Clear-AuthenticationClipboard
             Clear-SecretVerificationState
             Clear-SecretDisplay
             Set-AuthenticationDisplay -SignedIn $false -Text 'Sign-in required'
@@ -3093,12 +3247,14 @@ function Complete-GraphOperation {
             }
         }
         if ($operationName -eq 'Inventory') {
-            $LoadingOverlay.Visibility = 'Collapsed'
-            $RefreshButtonText.Text = 'Refresh'
+            Reset-InventoryControls
             if ($script:AllDevices.Count -eq 0) {
                 $EmptyStateTitle.Text = 'Unable to load computers'
                 $EmptyStateDescription.Text = 'Check the status below, then try Refresh again.'
                 $EmptyState.Visibility = 'Visible'
+            }
+            else {
+                $friendly += ' Showing the previous inventory.'
             }
         }
         $RefreshButton.IsEnabled = $true
@@ -3123,7 +3279,7 @@ function Complete-GraphOperation {
         }
         'Inventory' {
             Set-DeviceInventory -Devices @($result.Devices)
-            $RefreshButton.IsEnabled = $true
+            Reset-InventoryControls
             Set-AppStatus -Message "Ready — updated $(([DateTimeOffset]$result.LoadedAt).ToLocalTime().ToString('h:mm tt'))"
         }
         'Credential' {
@@ -3131,7 +3287,7 @@ function Complete-GraphOperation {
             $verificationGeneration = $script:PendingCredentialVerificationGeneration
             $script:PendingCredentialAction = $null
             $script:PendingCredentialVerificationGeneration = $null
-            if (Test-SecretVerificationGeneration -Generation $verificationGeneration) {
+            if (-not $script:RecoveryRequestCanceled -and (Test-SecretVerificationGeneration -Generation $verificationGeneration)) {
                 Complete-CredentialAction -Action $action -Credential $result
             }
             else {
@@ -3140,7 +3296,7 @@ function Complete-GraphOperation {
                 }
                 Restore-SecretActionControls
                 Set-AppStatus -Message "Ready — signed in as $($settings.ExpectedAccount)"
-                Show-Toast -Message 'Verification expired or the Windows session changed. No password was exposed.' -Kind Info
+                Show-Toast -Message $(if ($script:RecoveryRequestCanceled) { 'Recovery action canceled. No password was exposed.' } else { 'Verification expired or the Windows session changed. No password was exposed.' }) -Kind Info
                 Set-RecoveryActionFocus -Kind LAPS -Action $action
             }
         }
@@ -3149,7 +3305,7 @@ function Complete-GraphOperation {
             $verificationGeneration = $script:PendingBitLockerVerificationGeneration
             $script:PendingBitLockerAction = $null
             $script:PendingBitLockerVerificationGeneration = $null
-            if (Test-SecretVerificationGeneration -Generation $verificationGeneration) {
+            if (-not $script:RecoveryRequestCanceled -and (Test-SecretVerificationGeneration -Generation $verificationGeneration)) {
                 Complete-BitLockerAction -Action $action -KeyResult $result
             }
             else {
@@ -3158,7 +3314,7 @@ function Complete-GraphOperation {
                 }
                 Restore-SecretActionControls
                 Set-AppStatus -Message "Ready — signed in as $($settings.ExpectedAccount)"
-                Show-Toast -Message 'Verification expired or the Windows session changed. No recovery key was exposed.' -Kind Info
+                Show-Toast -Message $(if ($script:RecoveryRequestCanceled) { 'Recovery action canceled. No recovery key was exposed.' } else { 'Verification expired or the Windows session changed. No recovery key was exposed.' }) -Kind Info
                 Set-RecoveryActionFocus -Kind BitLocker -Action $action
             }
         }
@@ -3185,7 +3341,8 @@ function Process-OperationOutput {
         }
     }
 
-    if ($operation.AsyncResult.IsCompleted) {
+    if (($null -eq $operation.AsyncResult -or $operation.AsyncResult.IsCompleted) -and
+        ($null -eq $operation.StopAsyncResult -or $operation.StopAsyncResult.IsCompleted)) {
         Complete-GraphOperation -Operation $operation
     }
 }
@@ -3296,13 +3453,14 @@ $DeviceGrid.Add_PreviewMouseWheel({
     $script:DeviceScrollViewer.ScrollToVerticalOffset($targetOffset)
     $eventArgs.Handled = $true
 })
-$DeviceGrid.Add_SelectionChanged({ Update-DetailPanel })
+$DeviceGrid.Add_SelectionChanged({ Cancel-PendingRecoveryAction; Update-DetailPanel })
 $OpenIntuneButton.Add_Click({ Open-SelectedDevicePortal -Portal Intune })
 $OpenEntraButton.Add_Click({ Open-SelectedDevicePortal -Portal Entra })
 $LapsTabButton.Add_Click({ Set-RecoveryTab -Tab 'LAPS' })
 $BitLockerTabButton.Add_Click({ Set-RecoveryTab -Tab 'BitLocker' })
 $BitLockerKeySelector.Add_SelectionChanged({
     if (-not $script:SelectionChanging) {
+        Cancel-PendingRecoveryAction
         Clear-SecretDisplay
         Update-BitLockerSelection
     }
@@ -3328,7 +3486,8 @@ $CopyAccountButton.Add_Click({
     }
 })
 $RefreshButton.Add_Click({
-    if ($script:IsSignedIn) { Start-InventoryLoad } else { Start-Authentication }
+    if ($null -ne $script:CurrentOperation -and $script:CurrentOperation.Name -eq 'Inventory') { Stop-InventoryLoad }
+    elseif ($script:IsSignedIn) { Start-InventoryLoad } else { Start-Authentication }
 })
 $SignInButton.Add_Click({ Start-Authentication })
 $CopyCodeButton.Add_Click({
@@ -3377,17 +3536,19 @@ $window.Add_PreviewKeyDown({
         if ($script:IsSignedIn) { Start-InventoryLoad } else { Start-Authentication }
         $eventArgs.Handled = $true
     }
-    elseif ($eventArgs.Key -eq [System.Windows.Input.Key]::Escape -and
-        ($PasswordText.Text -ne '••••••••••••••••' -or $BitLockerKeyText.Text -notlike '••••••-*')) {
-        $selected = Get-SelectedDevice
-        $preserveLapsStatus = $script:ClipboardKind -eq 'LAPS' -and $null -ne $selected -and
-            [string]::Equals([string]$selected.EntraDeviceId, [string]$script:ClipboardDeviceId, [StringComparison]::OrdinalIgnoreCase) -and
-            $script:ClipboardClearAt -gt (Get-SensitiveClockNow)
-        $preserveBitLockerStatus = $script:ClipboardKind -eq 'BitLocker' -and $null -ne $selected -and
-            [string]::Equals([string]$selected.EntraDeviceId, [string]$script:ClipboardDeviceId, [StringComparison]::OrdinalIgnoreCase) -and
-            $script:ClipboardClearAt -gt (Get-SensitiveClockNow)
-        Clear-SecretDisplay -PreservePasswordStatus:$preserveLapsStatus -PreserveBitLockerStatus:$preserveBitLockerStatus
-        if ($preserveLapsStatus -or $preserveBitLockerStatus) { $null = Update-ClipboardStatusForSelection }
+    elseif ($eventArgs.Key -eq [System.Windows.Input.Key]::Escape) {
+        Cancel-PendingRecoveryAction
+        if ($PasswordText.Text -ne '••••••••••••••••' -or $BitLockerKeyText.Text -notlike '••••••-*') {
+            $selected = Get-SelectedDevice
+            $preserveLapsStatus = $script:ClipboardKind -eq 'LAPS' -and $null -ne $selected -and
+                [string]::Equals([string]$selected.EntraDeviceId, [string]$script:ClipboardDeviceId, [StringComparison]::OrdinalIgnoreCase) -and
+                $script:ClipboardClearAt -gt (Get-SensitiveClockNow)
+            $preserveBitLockerStatus = $script:ClipboardKind -eq 'BitLocker' -and $null -ne $selected -and
+                [string]::Equals([string]$selected.EntraDeviceId, [string]$script:ClipboardDeviceId, [StringComparison]::OrdinalIgnoreCase) -and
+                $script:ClipboardClearAt -gt (Get-SensitiveClockNow)
+            Clear-SecretDisplay -PreservePasswordStatus:$preserveLapsStatus -PreserveBitLockerStatus:$preserveBitLockerStatus
+            if ($preserveLapsStatus -or $preserveBitLockerStatus) { $null = Update-ClipboardStatusForSelection }
+        }
         $eventArgs.Handled = $true
     }
 })
@@ -3415,7 +3576,7 @@ $pollTimer.Add_Tick({
         $clipboardCleared = $false
         $clipboardCleanupComplete = $false
         try {
-            $clipboardCleared = [M365Workbench.Security.SecureClipboard]::ClearIfUnchanged()
+            $clipboardCleared = [M365Workbench.Security.SecureClipboard]::ClearIfUnchanged($false)
             $clipboardCleanupComplete = $true
         }
         catch {
@@ -3480,7 +3641,7 @@ $sessionMessageHook = [System.Windows.Interop.HwndSourceHook]{
         Clear-SecretVerificationState
         Clear-SecretDisplay
         try {
-            $null = [M365Workbench.Security.SecureClipboard]::ClearIfUnchanged()
+            $null = [M365Workbench.Security.SecureClipboard]::ClearIfUnchanged($false)
             $script:ClipboardClearAt = [DateTimeOffset]::MinValue
             $script:ClipboardDeviceId = $null
             $script:ClipboardKind = $null
@@ -3562,6 +3723,10 @@ $window.Add_Loaded({
             $script:ClipboardClearAt = (Get-SensitiveClockNow).AddSeconds(45)
             $null = Update-ClipboardStatusForSelection
         }
+        elseif ($RenderPreviewState -eq 'InventoryRefreshing') {
+            # Presentation only; preview mode never starts a Graph operation.
+            Set-InventoryLoadingState
+        }
         elseif ($DemoMode) {
             Set-RecoveryTab -Tab 'BitLocker'
             if ($null -ne $DeviceGrid.SelectedItem -and $DeviceGrid.Columns.Count -gt 3) {
@@ -3583,7 +3748,7 @@ $window.Add_Closed({
     Clear-SecretDisplay
     try { $null = [M365Workbench.Security.SecureClipboard]::ClearIfUnchanged() } catch { }
     if ($null -ne $script:GraphPowerShell) {
-        if ($null -ne $script:CurrentOperation -and -not $script:CurrentOperation.AsyncResult.IsCompleted) {
+        if ($null -ne $script:CurrentOperation -and $null -ne $script:CurrentOperation.AsyncResult -and -not $script:CurrentOperation.AsyncResult.IsCompleted) {
             try { $script:GraphPowerShell.Stop() } catch { }
         }
         $script:GraphPowerShell.Dispose()

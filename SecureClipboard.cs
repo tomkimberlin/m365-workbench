@@ -125,6 +125,16 @@ namespace M365Workbench.Security
         /// </summary>
         public static bool ClearIfUnchanged()
         {
+            return ClearIfUnchanged(true);
+        }
+
+        /// <summary>
+        /// Timer/session callbacks should use false: report contention immediately
+        /// and let the UI schedule its next retry instead of sleeping on that thread.
+        /// Ownership is retained when opening the clipboard fails.
+        /// </summary>
+        public static bool ClearIfUnchanged(bool retryOnContention)
+        {
             lock (Gate)
             {
                 if (_ownedSequence == 0 || GetClipboardSequenceNumber() != _ownedSequence)
@@ -133,7 +143,14 @@ namespace M365Workbench.Security
                     return false;
                 }
 
-                OpenClipboardWithRetry(IntPtr.Zero);
+                if (retryOnContention)
+                {
+                    OpenClipboardWithRetry(IntPtr.Zero);
+                }
+                else if (!OpenClipboard(IntPtr.Zero))
+                {
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "The clipboard is busy. Please try again.");
+                }
                 try
                 {
                     if (GetClipboardSequenceNumber() != _ownedSequence)

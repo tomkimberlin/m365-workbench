@@ -129,7 +129,7 @@ Assert-True -Condition $ownerRejected -Name 'Clipboard rejects missing owner bef
 # Compile the real clipboard algorithm against deterministic native-call shims.
 # This tests races/OS contention without reading or overwriting the user's clipboard.
 $nativeShims = @{
-    OpenClipboard = 'private static bool OpenClipboard(IntPtr hWndNewOwner) { return !Busy; }'
+    OpenClipboard = 'private static bool OpenClipboard(IntPtr hWndNewOwner) { OpenAttempts++; return !Busy; }'
     CloseClipboard = 'private static bool CloseClipboard() { if (ReplaceOnClose) { Sequence++; ReplaceOnClose = false; } return true; }'
     EmptyClipboard = 'private static bool EmptyClipboard() { Sequence++; EmptyCount++; return true; }'
     SetClipboardData = 'private static IntPtr SetClipboardData(uint uFormat, IntPtr hMem) { Formats.Add(uFormat); Sequence++; Marshal.FreeHGlobal(hMem); return new IntPtr(1); }'
@@ -151,6 +151,7 @@ $clipboardAlgorithm = [regex]::Replace($clipboardAlgorithm, '(?s)\[DllImport\([^
 })
 $clipboardAlgorithm = $clipboardAlgorithm.Replace('private const uint CfUnicodeText', @'
 public static bool Busy;
+        public static int OpenAttempts;
         public static bool ReplaceOnClose;
         public static uint Sequence = 1;
         public static int EmptyCount;
@@ -169,6 +170,15 @@ $busyRejected = $false
 try { $null = [M365Workbench.TestDoubles.SecureClipboard]::ClearIfUnchanged() } catch { $busyRejected = $true }
 [M365Workbench.TestDoubles.SecureClipboard]::Busy = $false
 Assert-True -Condition ($busyRejected -and [M365Workbench.TestDoubles.SecureClipboard]::ClearIfUnchanged()) -Name 'Clipboard contention preserves ownership so a later retry can clear the secret'
+
+[M365Workbench.TestDoubles.SecureClipboard]::SetSensitiveText('synthetic', [IntPtr]1)
+[M365Workbench.TestDoubles.SecureClipboard]::Busy = $true
+$attemptsBefore=[M365Workbench.TestDoubles.SecureClipboard]::OpenAttempts
+$busyRejected=$false
+try { $null=[M365Workbench.TestDoubles.SecureClipboard]::ClearIfUnchanged($false) } catch { $busyRejected=$true }
+Assert-True -Condition ($busyRejected -and [M365Workbench.TestDoubles.SecureClipboard]::OpenAttempts -eq $attemptsBefore + 1) -Name 'Timer-driven clipboard cleanup makes one attempt without a blocking retry loop'
+[M365Workbench.TestDoubles.SecureClipboard]::Busy = $false
+Assert-True -Condition ([M365Workbench.TestDoubles.SecureClipboard]::ClearIfUnchanged($false)) -Name 'Nonblocking clipboard cleanup retains ownership until its successful retry'
 
 & {
     function Process-OperationOutput { }

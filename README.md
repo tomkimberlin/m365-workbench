@@ -17,6 +17,8 @@ M365 Workbench is a Windows desktop utility for Microsoft Entra ID and Microsoft
 - Combines Intune managed-device data with Entra device, Windows LAPS, and BitLocker metadata.
 - Identifies Entra-only records without assuming they are stale or safe to delete.
 - Shows device, management, compliance, encryption, sync, and approximate Entra activity details.
+- Preserves sorting and the selected recovery-key record across refreshes; a running refresh can be canceled without losing the previous inventory.
+- Shows a compact BitLocker key ID with the full identifier on hover, and supports typing an ID prefix in the key picker.
 - Opens the selected device directly in the Intune or Entra admin center.
 - Retrieves one selected LAPS password or BitLocker recovery key only after an explicit copy or reveal action.
 - Verifies the current Windows user before recovery access and uses a fresh Microsoft device-code verification when local verification is unavailable.
@@ -31,7 +33,7 @@ All screenshots, tests, and demo records use fictional `contoso` identities and 
 - `Microsoft.Graph.Authentication` 2.38.0 or later
 - A Microsoft Entra work or school account in the configured tenant
 
-Both the standard PowerShell installer and Microsoft Store installation are supported. The launcher also checks absolute directories on `PATH`. The window title identifies the current build as `2026.09.22`.
+Both the standard PowerShell installer and Microsoft Store installation are supported. The launcher also checks absolute directories on `PATH`. The window title identifies the current build as `2026.09.28`.
 
 ## Quick start
 
@@ -128,7 +130,7 @@ See [SECURITY.md](SECURITY.md) to report a vulnerability. Never put production t
 - `Ctrl + F` focuses device search.
 - `Ctrl + Shift + C` copies the secret from the active LAPS or BitLocker tab.
 - `F5` refreshes inventory.
-- `Esc` immediately hides a revealed secret.
+- `Esc` immediately hides a revealed secret and dismisses a pending recovery action. Changing the device, recovery tab, or key selection also dismisses pending recovery intent; a late result is discarded.
 
 ## Tests
 

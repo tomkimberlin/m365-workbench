@@ -301,6 +301,7 @@ Assert-Equal -Actual $actualShortcutAppId -Expected $expectedAppUserModelId -Nam
 
 $mainSource = [IO.File]::ReadAllText($mainScriptPath)
 . (Join-Path $PSScriptRoot 'Test-Quality.ps1')
+. (Join-Path $PSScriptRoot 'Test-Workflow.ps1')
 . (Join-Path $PSScriptRoot 'Test-InventoryRefresh.ps1')
 . (Join-Path $PSScriptRoot 'Test-SecurityBoundaries.ps1')
 $settingsExampleSource = [IO.File]::ReadAllText((Join-Path $appRoot 'M365Workbench.settings.example.psd1'))
