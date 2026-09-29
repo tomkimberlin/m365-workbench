@@ -143,7 +143,12 @@ $laps = @(
     [pscustomobject]@{ id='11111111-1111-1111-1111-111111111111'; deviceName='DEMO-DEVICE-PRIMARY'; lastBackupDateTime=$now.AddDays(-2); refreshDateTime=$now.AddDays(28) },
     [pscustomobject]@{ id='44444444-4444-4444-4444-444444444444'; deviceName='DEMO-DEVICE-COLLISION'; lastBackupDateTime=$now.AddDays(-1); refreshDateTime=$now.AddDays(29) }
 )
-$rows = @(Merge-IntuneLapsDeviceData -ManagedDevices $managed -LapsMetadata $laps)
+$primaryUserFixture = @{
+    old=@([pscustomobject]@{displayName='Old Assignment';userPrincipalName='old@contoso.com'})
+    new=@([pscustomobject]@{displayName='Current User';userPrincipalName='current@contoso.com'})
+    different=@([pscustomobject]@{displayName='No Laps';userPrincipalName='nolaps@contoso.com'})
+}
+$rows = @(Merge-IntuneLapsDeviceData -ManagedDevices $managed -LapsMetadata $laps -PrimaryUsersByManagedDeviceId $primaryUserFixture)
 Assert-Equal -Actual $rows.Count -Expected 3 -Name 'Windows inventory is deduplicated and Entra-only LAPS device is included'
 Assert-Equal -Actual @($rows | Where-Object DeviceName -eq 'DEMO-DEVICE-PRIMARY').Count -Expected 1 -Name 'Duplicate Intune records collapse to one row'
 Assert-Equal -Actual ($rows | Where-Object DeviceName -eq 'DEMO-DEVICE-PRIMARY').PrimaryUser -Expected 'Current User' -Name 'Newest Intune record wins deduplication'
@@ -304,8 +309,18 @@ $mainSource = [IO.File]::ReadAllText($mainScriptPath)
 . (Join-Path $PSScriptRoot 'Test-Workflow.ps1')
 . (Join-Path $PSScriptRoot 'Test-InventoryRefresh.ps1')
 . (Join-Path $PSScriptRoot 'Test-SecurityBoundaries.ps1')
+. (Join-Path $PSScriptRoot 'Test-PrimaryUsers.ps1')
+. (Join-Path $PSScriptRoot 'Test-Scrolling.ps1')
 $settingsExampleSource = [IO.File]::ReadAllText((Join-Path $appRoot 'M365Workbench.settings.example.psd1'))
-$fixtureDeviceNames = @([regex]::Matches($mainSource, "(?:deviceName|displayName)='(?<name>[^']+)'" ) | ForEach-Object { $_.Groups['name'].Value })
+$fixtureDeviceNames = @($mainAst.FindAll({param($node) $node -is [Management.Automation.Language.HashtableAst]},$true) | ForEach-Object {
+    $pairs=@($_.KeyValuePairs | Where-Object {$_.Item1 -is [Management.Automation.Language.StringConstantExpressionAst]})
+    $keys=@($pairs | ForEach-Object {$_.Item1.Value})
+    $nameKey=if($keys -contains 'deviceName'){'deviceName'}elseif($keys -contains 'deviceId' -and $keys -contains 'displayName'){'displayName'}else{$null}
+    if($nameKey) {
+        $expression=($pairs | Where-Object {$_.Item1.Value -eq $nameKey}).Item2.PipelineElements[0].Expression
+        if($expression -is [Management.Automation.Language.StringConstantExpressionAst]) {$expression.Value}
+    }
+})
 $fixtureSerialNumbers = @([regex]::Matches($mainSource, "serialNumber='(?<serial>[^']+)'" ) | ForEach-Object { $_.Groups['serial'].Value })
 Assert-True -Condition ($fixtureDeviceNames.Count -gt 0 -and @($fixtureDeviceNames | Where-Object { -not $_.StartsWith('DEMO-DEVICE-') }).Count -eq 0) -Name 'Every embedded device fixture is unmistakably synthetic'
 Assert-True -Condition ($fixtureSerialNumbers.Count -gt 0 -and @($fixtureSerialNumbers | Where-Object { -not $_.StartsWith('DEMO-SERIAL-') }).Count -eq 0) -Name 'Every embedded serial-number fixture is unmistakably synthetic'

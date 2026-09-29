@@ -15,6 +15,7 @@ M365 Workbench is a Windows desktop utility for Microsoft Entra ID and Microsoft
 
 - Searches Windows devices by name, user, UPN, serial number, model, or Entra device ID.
 - Combines Intune managed-device data with Entra device, Windows LAPS, and BitLocker metadata.
+- Displays actual Intune primary-user assignments; an empty assignment shows Unassigned, never the enrollment user.
 - Identifies Entra-only records without assuming they are stale or safe to delete.
 - Shows device, management, compliance, encryption, sync, and approximate Entra activity details.
 - Preserves sorting and the selected recovery-key record across refreshes; a running refresh can be canceled without losing the previous inventory.
@@ -33,7 +34,7 @@ All screenshots, tests, and demo records use fictional `contoso` identities and 
 - `Microsoft.Graph.Authentication` 2.38.0 or later
 - A Microsoft Entra work or school account in the configured tenant
 
-Both the standard PowerShell installer and Microsoft Store installation are supported. The launcher also checks absolute directories on `PATH`. The window title identifies the current build as `2026.09.28`.
+Both the standard PowerShell installer and Microsoft Store installation are supported. The launcher also checks absolute directories on `PATH`. The window title identifies the current build as `2026.09.29`.
 
 ## Quick start
 

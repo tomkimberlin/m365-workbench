@@ -117,7 +117,7 @@ if ([Threading.Thread]::CurrentThread.GetApartmentState() -ne [Threading.Apartme
 $xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="M365 Workbench · 2026.09.28"
+        Title="M365 Workbench · 2026.09.29"
         Width="1280" Height="780" MinWidth="1100" MinHeight="680"
         WindowStartupLocation="CenterScreen"
         Background="#F5F7FB"
@@ -1221,7 +1221,6 @@ $script:AuthenticationVerificationGeneration = $null
 $script:ActiveRecoveryTab = 'LAPS'
 $script:ToastExpiresAt = [DateTimeOffset]::MinValue
 $script:SelectionChanging = $false
-$script:DeviceScrollViewer = $null
 
 $authOperationScript = @'
 param($TenantId, $ExpectedTenantObjectId, $ExpectedAccount, $RequiredScopes, $CoreModulePath, $MinimumGraphVersion)
@@ -1519,19 +1518,21 @@ param($CoreModulePath)
     }
 
     try {
-        $managedUri = "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices?`$select=id,deviceName,azureADDeviceId,userPrincipalName,userDisplayName,serialNumber,operatingSystem,osVersion,model,manufacturer,lastSyncDateTime,complianceState,managementState,managedDeviceOwnerType,deviceEnrollmentType,isEncrypted,managementAgent,enrolledDateTime"
+        $managedUri = "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices?`$select=id,deviceName,azureADDeviceId,serialNumber,operatingSystem,osVersion,model,manufacturer,lastSyncDateTime,complianceState,managementState,managedDeviceOwnerType,deviceEnrollmentType,isEncrypted,managementAgent,enrolledDateTime"
         $lapsUri = "https://graph.microsoft.com/v1.0/directory/deviceLocalCredentials?`$select=id,deviceName,lastBackupDateTime,refreshDateTime"
         $bitLockerUri = "https://graph.microsoft.com/v1.0/informationProtection/bitlocker/recoveryKeys"
         $entraUri = "https://graph.microsoft.com/v1.0/devices?`$select=id,deviceId,displayName,accountEnabled,operatingSystem,operatingSystemVersion,trustType,approximateLastSignInDateTime,registrationDateTime,isManaged,isCompliant,deviceOwnership,manufacturer,model"
 
         $managedDevices = @(Invoke-PagedGraphGet -Uri $managedUri)
+        $stage = 'Intune primary users'
+        $primaryUsers = Get-IntunePrimaryUserMap -ManagedDevices $managedDevices
         $stage = 'LAPS metadata'
         $lapsMetadata = @(Invoke-PagedGraphGet -Uri $lapsUri)
         $stage = 'BitLocker metadata'
         $bitLockerMetadata = @(Invoke-PagedGraphGet -Uri $bitLockerUri)
         $stage = 'Entra device inventory'
         $entraDevices = @(Invoke-PagedGraphGet -Uri $entraUri)
-        $rows = @(Merge-IntuneLapsDeviceData -ManagedDevices $managedDevices -LapsMetadata $lapsMetadata -BitLockerMetadata $bitLockerMetadata -EntraDevices $entraDevices)
+        $rows = @(Merge-IntuneLapsDeviceData -ManagedDevices $managedDevices -LapsMetadata $lapsMetadata -BitLockerMetadata $bitLockerMetadata -EntraDevices $entraDevices -PrimaryUsersByManagedDeviceId $primaryUsers)
 
         [pscustomobject]@{
             Kind = 'InventoryResult'
@@ -3377,7 +3378,14 @@ function Get-DemoInventory {
         [pscustomobject]@{ id='b5555555-5555-4555-8555-555555555555'; deviceId='55555555-5555-5555-5555-555555555555'; displayName='DEMO-DEVICE-ECHO'; operatingSystem='Windows'; operatingSystemVersion='10.0.22631'; trustType='AzureAd'; approximateLastSignInDateTime=$now.AddDays(-74); accountEnabled=$false; manufacturer='Dell'; model='Precision 3660' },
         [pscustomobject]@{ id='b6666666-6666-4666-8666-666666666666'; deviceId='66666666-6666-6666-6666-666666666666'; displayName='DEMO-DEVICE-FOXTROT'; operatingSystem='Windows'; operatingSystemVersion='10.0.19045'; trustType='AzureAd'; approximateLastSignInDateTime=$now.AddDays(-143); accountEnabled=$false; manufacturer='HP'; model='ProDesk 600 G5' }
     )
-    return @(Merge-IntuneLapsDeviceData -ManagedDevices $managed -LapsMetadata $laps -BitLockerMetadata $bitLocker -EntraDevices $entra)
+    $primaryUsers = @{
+        'c1111111-1111-4111-8111-111111111111' = @([pscustomobject]@{displayName='Ashley Morgan';userPrincipalName='ashley.morgan@contoso.com'})
+        'c2222222-2222-4222-8222-222222222222' = @([pscustomobject]@{displayName='Jason Reed';userPrincipalName='jason.reed@contoso.com'})
+        'c3333333-3333-4333-8333-333333333333' = @([pscustomobject]@{displayName='Brandon Cole';userPrincipalName='brandon.cole@contoso.com'})
+        'c4444444-4444-4444-8444-444444444444' = @()
+        'c5555555-5555-4555-8555-555555555555' = @()
+    }
+    return @(Merge-IntuneLapsDeviceData -ManagedDevices $managed -LapsMetadata $laps -BitLockerMetadata $bitLocker -EntraDevices $entra -PrimaryUsersByManagedDeviceId $primaryUsers)
 }
 
 function Save-WindowPreview {
@@ -3437,10 +3445,10 @@ $DeviceGrid.Add_PreviewMouseWheel({
         return
     }
 
-    if ($null -eq $script:DeviceScrollViewer) {
-        $script:DeviceScrollViewer = Find-DeviceScrollViewer -Parent $DeviceGrid
-    }
-    if ($null -eq $script:DeviceScrollViewer) {
+    # Templates can be rebuilt during a long-running session. Never retain a
+    # visual child: an old viewer still accepts commands but no longer moves rows.
+    $viewer = Find-DeviceScrollViewer -Parent $DeviceGrid
+    if ($null -eq $viewer -or $viewer.ScrollableHeight -le 0) {
         return
     }
 
@@ -3448,9 +3456,9 @@ $DeviceGrid.Add_PreviewMouseWheel({
     # Scale the raw wheel delta to three quarters of a row for precise, smooth movement.
     $pixelsPerDetent = [double]$DeviceGrid.RowHeight * 0.75
     $scrollDelta = ([double]$eventArgs.Delta / 120.0) * $pixelsPerDetent
-    $maximumOffset = [Math]::Max(0.0, $script:DeviceScrollViewer.ExtentHeight - $script:DeviceScrollViewer.ViewportHeight)
-    $targetOffset = [Math]::Max(0.0, [Math]::Min($maximumOffset, $script:DeviceScrollViewer.VerticalOffset - $scrollDelta))
-    $script:DeviceScrollViewer.ScrollToVerticalOffset($targetOffset)
+    $maximumOffset = $viewer.ScrollableHeight
+    $targetOffset = [Math]::Max(0.0, [Math]::Min($maximumOffset, $viewer.VerticalOffset - $scrollDelta))
+    $viewer.ScrollToVerticalOffset($targetOffset)
     $eventArgs.Handled = $true
 })
 $DeviceGrid.Add_SelectionChanged({ Cancel-PendingRecoveryAction; Update-DetailPanel })

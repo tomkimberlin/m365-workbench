@@ -185,7 +185,10 @@ function New-LapsDeviceRow {
         [object[]]$BitLockerMetadata,
 
         [AllowNull()]
-        [object]$EntraDevice
+        [object]$EntraDevice,
+
+        [AllowNull()]
+        [System.Collections.IDictionary]$PrimaryUsersByManagedDeviceId
     )
 
     $deviceName = [string](Get-PropertyValue -InputObject $ManagedDevice -Name 'deviceName')
@@ -213,14 +216,23 @@ function New-LapsDeviceRow {
         }
     }
 
-    $userDisplayName = [string](Get-PropertyValue -InputObject $ManagedDevice -Name 'userDisplayName')
-    $userPrincipalName = [string](Get-PropertyValue -InputObject $ManagedDevice -Name 'userPrincipalName')
-    $primaryUser = $userDisplayName
-    if ([string]::IsNullOrWhiteSpace($primaryUser)) {
-        $primaryUser = $userPrincipalName
-    }
-    if ([string]::IsNullOrWhiteSpace($primaryUser)) {
-        $primaryUser = 'Unassigned'
+    # Device-level user fields describe enrollment, not current primary-user
+    # assignment. Only a successful /managedDevices/{id}/users read is authority.
+    $managedId = [string](Get-PropertyValue -InputObject $ManagedDevice -Name 'id')
+    $primaryUser = if ($null -eq $ManagedDevice) { 'Unassigned' } else { 'Unavailable' }
+    $userPrincipalName = ''
+    if ($null -ne $PrimaryUsersByManagedDeviceId -and $PrimaryUsersByManagedDeviceId.Contains($managedId)) {
+        $assignedUsers = @($PrimaryUsersByManagedDeviceId[$managedId])
+        $names = @($assignedUsers | ForEach-Object {
+            $name = [string](Get-PropertyValue -InputObject $_ -Name 'displayName')
+            if ([string]::IsNullOrWhiteSpace($name)) { $name = [string](Get-PropertyValue -InputObject $_ -Name 'userPrincipalName') }
+            if ([string]::IsNullOrWhiteSpace($name)) { $name = 'Assigned user (details unavailable)' }
+            $name
+        })
+        $primaryUser = if ($names.Count -eq 0) { 'Unassigned' } else { $names -join '; ' }
+        $userPrincipalName = (@($assignedUsers | ForEach-Object {
+            [string](Get-PropertyValue -InputObject $_ -Name 'userPrincipalName')
+        } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) -join '; ')
     }
 
     $lastSync = ConvertTo-LapsDateTimeOffset -Value (Get-PropertyValue -InputObject $ManagedDevice -Name 'lastSyncDateTime')
@@ -311,7 +323,6 @@ function New-LapsDeviceRow {
     $searchText = @(
         $deviceName
         $primaryUser
-        $userDisplayName
         $userPrincipalName
         $serialNumber
         $model
@@ -390,7 +401,10 @@ function Merge-IntuneLapsDeviceData {
         [object[]]$BitLockerMetadata,
 
         [AllowNull()]
-        [object[]]$EntraDevices
+        [object[]]$EntraDevices,
+
+        [AllowNull()]
+        [System.Collections.IDictionary]$PrimaryUsersByManagedDeviceId
     )
 
     $lapsById = @{}
@@ -484,7 +498,7 @@ function Merge-IntuneLapsDeviceData {
             $null = $usedDeviceIds.Add($entraId)
         }
 
-        $rows.Add((New-LapsDeviceRow -ManagedDevice $device -LapsMetadata $metadata -BitLockerMetadata $bitLocker -EntraDevice $entraDevice))
+        $rows.Add((New-LapsDeviceRow -ManagedDevice $device -LapsMetadata $metadata -BitLockerMetadata $bitLocker -EntraDevice $entraDevice -PrimaryUsersByManagedDeviceId $PrimaryUsersByManagedDeviceId))
     }
 
     # Include Windows devices present only in Entra, plus recovery records whose
@@ -510,6 +524,84 @@ function Merge-IntuneLapsDeviceData {
     }
 
     return @($rows | Sort-Object DeviceName, UserPrincipalName)
+}
+
+function Get-IntunePrimaryUserMap {
+    [CmdletBinding()]
+    param([AllowNull()][object[]]$ManagedDevices)
+
+    $usersById = @{}
+    $pending = [System.Collections.Generic.Queue[object]]::new()
+    $visited = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($device in @($ManagedDevices)) {
+        if ((Get-PropertyValue $device 'operatingSystem') -ne 'Windows') { continue }
+        $id = [string](Get-PropertyValue $device 'id')
+        if (-not (Test-UsableEntraDeviceId $id)) { throw 'Intune returned an invalid managed-device ID.' }
+        if ($usersById.ContainsKey($id)) { continue }
+        $usersById[$id] = [System.Collections.Generic.List[object]]::new()
+        $url = '/deviceManagement/managedDevices/' + [uri]::EscapeDataString($id) + '/users?$select=id,displayName,userPrincipalName'
+        $null = $visited.Add($url)
+        $pending.Enqueue([pscustomobject]@{ DeviceId=$id; Url=$url; Page=1 })
+    }
+
+    while ($pending.Count -gt 0) {
+        $requests = [System.Collections.Generic.List[object]]::new()
+        $byRequestId = @{}
+        while ($pending.Count -gt 0 -and $requests.Count -lt 20) {
+            $item = $pending.Dequeue()
+            $requestId = [string]($requests.Count + 1)
+            $byRequestId[$requestId] = $item
+            $requests.Add(@{ id=$requestId; method='GET'; url=$item.Url })
+        }
+        # POST is only the Graph batch envelope. Every enclosed request is a read.
+        $body = @{ requests=@($requests.ToArray()) } | ConvertTo-Json -Depth 6 -Compress
+        $batch = Invoke-MgGraphRequest -Method POST -Uri 'https://graph.microsoft.com/v1.0/$batch' -Body $body -ContentType 'application/json' -OutputType PSObject -ErrorAction Stop
+        $responses = @(Get-PropertyValue $batch 'responses')
+        if ($responses.Count -ne $requests.Count) { throw 'Incomplete Intune primary-user batch response.' }
+        $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+        foreach ($response in $responses) {
+            $responseId = [string](Get-PropertyValue $response 'id')
+            if (-not $byRequestId.ContainsKey($responseId) -or -not $seen.Add($responseId)) {
+                throw 'Invalid Intune primary-user response correlation.'
+            }
+            $item = $byRequestId[$responseId]
+            $status = [int](Get-PropertyValue $response 'status')
+            if ($status -ne 200) {
+                # A batch HTTP 200 does not imply its individual requests succeeded.
+                # Keep the previous inventory; never turn a failed read into Unassigned.
+                $failure = [InvalidOperationException]::new('Intune primary-user lookup failed. Retry the inventory refresh.')
+                $failure | Add-Member -NotePropertyName ResponseStatusCode -NotePropertyValue $status
+                $failure | Add-Member -NotePropertyName ErrorCode -NotePropertyValue 'PrimaryUserLookupFailed'
+                throw $failure
+            }
+            $page = Get-PropertyValue $response 'body'
+            if ($null -eq $page -or $null -eq $page.PSObject.Properties['value'] -or $null -eq $page.value -or
+                $page.value -isnot [System.Collections.IEnumerable] -or $page.value -is [string]) {
+                throw 'Malformed Intune primary-user collection.'
+            }
+            foreach ($user in @($page.value)) {
+                if (-not (Test-UsableEntraDeviceId ([string](Get-PropertyValue $user 'id')))) {
+                    throw 'Malformed Intune primary-user record.'
+                }
+                $usersById[$item.DeviceId].Add($user)
+            }
+            $nextLink = [string](Get-PropertyValue $page '@odata.nextLink')
+            if (-not [string]::IsNullOrWhiteSpace($nextLink)) {
+                $nextUri = [uri]$nextLink
+                $expectedPath = '/v1.0/deviceManagement/managedDevices/' + [uri]::EscapeDataString($item.DeviceId) + '/users'
+                if (-not $nextUri.IsAbsoluteUri -or $nextUri.Scheme -ne 'https' -or $nextUri.Host -ne 'graph.microsoft.com' -or
+                    -not $nextUri.IsDefaultPort -or $nextUri.UserInfo -or $nextUri.Fragment -or $nextUri.AbsolutePath -ne $expectedPath) {
+                    throw 'Untrusted Intune primary-user page link.'
+                }
+                $nextUrl = $nextUri.PathAndQuery.Substring('/v1.0'.Length)
+                if ($item.Page -ge 100 -or -not $visited.Add($nextUrl)) { throw 'Intune primary-user pagination did not complete safely.' }
+                $pending.Enqueue([pscustomobject]@{ DeviceId=$item.DeviceId; Url=$nextUrl; Page=$item.Page+1 })
+            }
+        }
+    }
+    $result = @{}
+    foreach ($id in $usersById.Keys) { $result[$id] = $usersById[$id].ToArray() }
+    return $result
 }
 
 function Select-CurrentLapsCredential {
@@ -806,6 +898,7 @@ Export-ModuleMember -Function @(
     'Get-DeviceAdminPortalUri'
     'Get-DeviceCodeFromMessage'
     'Get-FriendlyLapsErrorMessage'
+    'Get-IntunePrimaryUserMap'
     'Get-SecretVerificationDecision'
     'Merge-IntuneLapsDeviceData'
     'Select-CurrentLapsCredential'
